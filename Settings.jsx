@@ -93,10 +93,15 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   async function addStaffAccount() {
     if (!newStaff.username || !newStaff.password) return;
     const { error } = await supabase.from("staff_accounts").insert(newStaff);
-    setStaffMsg(error ? "That username may already exist." : "Account created.");
-    setNewStaff({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
-    reload();
-    setTimeout(() => setStaffMsg(""), 2500);
+    if (error) {
+      console.error("addStaffAccount error:", error);
+      setStaffMsg(`Could not save: ${error.message}`);
+    } else {
+      setStaffMsg("Account created.");
+      setNewStaff({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
+      reload();
+    }
+    setTimeout(() => setStaffMsg(""), 6000);
   }
 
   async function saveStaffPermissions(id, permissions) {
