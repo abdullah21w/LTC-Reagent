@@ -9,23 +9,19 @@ export default function Login({ config, staffAccounts, onLogin }) {
   function submit(e) {
     e.preventDefault();
     if (username === config.owner_username && password === config.owner_password) {
-      onLogin("owner", username);
-      return;
-    }
-    if (username === config.lab_username && password === config.lab_password) {
-      onLogin("lab", username);
+      onLogin("owner", username, null);
       return;
     }
     const staffMatch = (staffAccounts || []).find((s) => s.username === username && s.password === password);
     if (staffMatch) {
-      onLogin("lab", username);
+      onLogin("staff", username, staffMatch.permissions || {});
       return;
     }
     setError("Incorrect username or password.");
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F3F2", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Sans', sans-serif", padding: 16 }}>
+    <div style={{ minHeight: "100vh", background: "#F0F3F2", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Sans', sans-serif", padding: 16 }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`}</style>
       <form onSubmit={submit} style={{ background: "#fff", borderRadius: 14, padding: 32, width: "100%", maxWidth: 360, border: "1px solid #E1E8E5" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
@@ -51,8 +47,9 @@ export default function Login({ config, staffAccounts, onLogin }) {
           <Lock size={14} /> Sign in
         </button>
       </form>
+      <div style={{ marginTop: 18, fontSize: 12, color: "#8A9694" }}>Made by Abdullah Ahmad</div>
     </div>
   );
 }
 
-const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 14, marginTop: 4, boxSizing: "border-box" };
+const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };

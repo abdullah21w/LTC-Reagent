@@ -2,19 +2,79 @@ import React, { useState } from "react";
 import { Trash2, Plus, Save } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
+const PERMISSION_FIELDS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "reports", label: "Reports" },
+  { key: "charts", label: "Charts" },
+  { key: "settings", label: "Settings" },
+  { key: "receive", label: "Receive stock" },
+  { key: "log_use", label: "Log use" },
+  { key: "edit", label: "Edit entries" },
+  { key: "delete", label: "Delete entries" },
+];
+
+const BLANK_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
+
+function PermissionGrid({ value, onToggle }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6 }}>
+      {PERMISSION_FIELDS.map((f) => (
+        <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#3A4A48", cursor: "pointer" }}>
+          <input type="checkbox" checked={!!value[f.key]} onChange={() => onToggle(f.key)} />
+          {f.label}
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function StaffAccountRow({ account, onSave, onRemove }) {
+  const [perms, setPerms] = useState({ ...BLANK_PERMISSIONS, ...(account.permissions || {}) });
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  function toggle(key) {
+    setPerms((p) => ({ ...p, [key]: !p[key] }));
+    setDirty(true);
+    setSaved(false);
+  }
+
+  async function save() {
+    await onSave(account.id, perms);
+    setDirty(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+        <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{account.username}</div>
+        {dirty && (
+          <button onClick={save} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+            <Save size={12} /> Save
+          </button>
+        )}
+        {saved && <span style={{ fontSize: 11.5, color: "#2F6B4F" }}>Saved</span>}
+        <button onClick={() => onRemove(account.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={15} /></button>
+      </div>
+      <PermissionGrid value={perms} onToggle={toggle} />
+    </div>
+  );
+}
+
 export default function Settings({ config, presets, role, staffAccounts, devices, reload }) {
   const departments = config.departments || [];
   const [newPreset, setNewPreset] = useState({ name: "", department: departments[0] || "", unit: "mL" });
   const [newDept, setNewDept] = useState("");
   const [newDevice, setNewDevice] = useState({ name: "", department: departments[0] || "" });
-  const [newStaff, setNewStaff] = useState({ username: "", password: "" });
+  const [newStaff, setNewStaff] = useState({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
   const [staffMsg, setStaffMsg] = useState("");
   const [creds, setCreds] = useState({
-    lab_username: config.lab_username,
-    lab_password: config.lab_password,
     owner_username: config.owner_username,
     owner_password: config.owner_password,
     low_stock_default_percent: config.low_stock_default_percent,
+    expiry_warning_days: config.expiry_warning_days ?? 30,
   });
   const [msg, setMsg] = useState("");
 
@@ -34,9 +94,14 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     if (!newStaff.username || !newStaff.password) return;
     const { error } = await supabase.from("staff_accounts").insert(newStaff);
     setStaffMsg(error ? "That username may already exist." : "Account created.");
-    setNewStaff({ username: "", password: "" });
+    setNewStaff({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
     reload();
     setTimeout(() => setStaffMsg(""), 2500);
+  }
+
+  async function saveStaffPermissions(id, permissions) {
+    await supabase.from("staff_accounts").update({ permissions }).eq("id", id);
+    reload();
   }
 
   async function removeStaffAccount(id) {
@@ -82,7 +147,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     <div>
       <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Settings</h2>
       <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 24 }}>
-        {role === "owner" ? "Full access — you can manage users, credentials, and inventory setup." : "You can manage departments, presets, and devices here."}
+        {role === "owner" ? "Full access — you can manage users, permissions, credentials, and inventory setup." : "You can manage departments, presets, and devices here."}
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>DEPARTMENTS</div>
@@ -188,12 +253,12 @@ export default function Settings({ config, presets, role, staffAccounts, devices
 
       {role === "owner" && (
         <>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EMPLOYEE ACCOUNTS</div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EMPLOYEE ACCOUNTS & PERMISSIONS</div>
           <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
-            Create a personal login for each employee. They get the same permissions as a lab account (receive, view data & reports, settings — no delete, no user management).
+            Create a personal login for each employee, and pick exactly what they can reach — pages and actions are all opt-in. Only the owner account can manage users, do permanent erase, and view the Activity log.
           </div>
-          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 14, marginBottom: 16 }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
               <input
                 placeholder="Username"
                 value={newStaff.username}
@@ -210,15 +275,17 @@ export default function Settings({ config, presets, role, staffAccounts, devices
                 <Plus size={14} /> Add
               </button>
             </div>
+            <div style={{ fontSize: 11.5, color: "#8A9694", marginBottom: 6 }}>Starting permissions for this new account (you can change them anytime below after creating it):</div>
+            <PermissionGrid
+              value={newStaff.permissions}
+              onToggle={(key) => setNewStaff((s) => ({ ...s, permissions: { ...s.permissions, [key]: !s.permissions[key] } }))}
+            />
             {staffMsg && <div style={{ fontSize: 12, color: "#516361", marginTop: 8 }}>{staffMsg}</div>}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 30 }}>
-            {(staffAccounts || []).length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No individual employee accounts yet — everyone shares the "Shared lab username/password" below.</div>}
+          <div style={{ marginBottom: 30 }}>
+            {(staffAccounts || []).length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No employee accounts yet — add one above.</div>}
             {(staffAccounts || []).map((s) => (
-              <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "9px 14px" }}>
-                <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{s.username}</div>
-                <button onClick={() => removeStaffAccount(s.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={15} /></button>
-              </div>
+              <StaffAccountRow key={s.id} account={s} onSave={saveStaffPermissions} onRemove={removeStaffAccount} />
             ))}
           </div>
         </>
@@ -229,15 +296,14 @@ export default function Settings({ config, presets, role, staffAccounts, devices
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>LOGIN & DEFAULTS</div>
           <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", gap: 10 }}>
-              <label style={{ ...labelStyle, flex: 1 }}>Shared lab username<input style={inputStyle} value={creds.lab_username} onChange={(e) => setCreds((c) => ({ ...c, lab_username: e.target.value }))} /></label>
-              <label style={{ ...labelStyle, flex: 1 }}>Shared lab password<input style={inputStyle} value={creds.lab_password} onChange={(e) => setCreds((c) => ({ ...c, lab_password: e.target.value }))} /></label>
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
               <label style={{ ...labelStyle, flex: 1 }}>Owner username<input style={inputStyle} value={creds.owner_username} onChange={(e) => setCreds((c) => ({ ...c, owner_username: e.target.value }))} /></label>
               <label style={{ ...labelStyle, flex: 1 }}>Owner password<input style={inputStyle} value={creds.owner_password} onChange={(e) => setCreds((c) => ({ ...c, owner_password: e.target.value }))} /></label>
             </div>
             <label style={labelStyle}>Default low-stock alert (% of quantity received)
               <input type="number" style={inputStyle} value={creds.low_stock_default_percent} onChange={(e) => setCreds((c) => ({ ...c, low_stock_default_percent: Number(e.target.value) }))} />
+            </label>
+            <label style={labelStyle}>Expiry warning threshold (days before expiry to mark "Watch")
+              <input type="number" min="1" style={inputStyle} value={creds.expiry_warning_days} onChange={(e) => setCreds((c) => ({ ...c, expiry_warning_days: Number(e.target.value) }))} />
             </label>
             <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save settings
@@ -254,5 +320,5 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   );
 }
 
-const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 14, marginTop: 4, boxSizing: "border-box" };
+const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };

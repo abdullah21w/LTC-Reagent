@@ -18,11 +18,11 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString() : "");
 
-function statusOf(item) {
+function statusOf(item, warnDays = 30) {
   const dExp = daysBetween(item.expiry_date, todayISO());
   const lowStock = item.current_quantity <= item.low_stock_threshold;
   if (dExp < 0 || item.current_quantity <= 0) return "red";
-  if (dExp <= 30 || lowStock) return "yellow";
+  if (dExp <= warnDays || lowStock) return "yellow";
   return "green";
 }
 
@@ -36,10 +36,17 @@ const STATUS_META = {
   green: { label: "Stable", color: "#2F6B4F", bg: "#E8F2EC" },
 };
 
+const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true };
+const DEFAULT_NEW_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [role, setRole] = useState(() => localStorage.getItem("reagent_role") || null);
   const [username, setUsername] = useState(() => localStorage.getItem("reagent_username") || "");
+  const [perms, setPerms] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("reagent_perms")) || null; } catch { return null; }
+  });
+  const can = (key) => role === "owner" || !!(perms && perms[key]);
   const [reagents, setReagents] = useState(null);
   const [logs, setLogs] = useState(null);
   const [presets, setPresets] = useState([]);
@@ -95,20 +102,29 @@ export default function App() {
     loadAll();
   }, []);
 
-  function handleLogin(newRole, newUsername) {
+  function handleLogin(newRole, newUsername, newPerms) {
+    const effectivePerms = newRole === "owner" ? FULL_PERMISSIONS : (newPerms || {});
     localStorage.setItem("reagent_role", newRole);
     localStorage.setItem("reagent_username", newUsername);
+    localStorage.setItem("reagent_perms", JSON.stringify(effectivePerms));
     setRole(newRole);
     setUsername(newUsername);
+    setPerms(effectivePerms);
+    const order = ["dashboard", "reports", "charts", "settings"];
+    const firstTab = order.find((t) => newRole === "owner" || effectivePerms[t]) || "dashboard";
+    setTab(firstTab);
   }
   function logout() {
     localStorage.removeItem("reagent_role");
     localStorage.removeItem("reagent_username");
+    localStorage.removeItem("reagent_perms");
     setRole(null);
     setUsername("");
+    setPerms(null);
   }
 
   async function addReagent(entry) {
+    if (!can("receive")) return;
     await supabase.from("reagents").insert({
       name: entry.name,
       department: entry.department,
@@ -135,6 +151,7 @@ export default function App() {
   }
 
   async function recordConsumption(entry) {
+    if (!can("log_use")) return;
     const item = reagents.find((r) => r.id === entry.reagentId);
     if (!item) return;
     const newQty = Math.max(0, item.current_quantity - entry.amount);
@@ -147,6 +164,7 @@ export default function App() {
   }
 
   async function saveEditedReagent(updated) {
+    if (!can("edit")) return;
     await supabase.from("reagents").update({
       lot_number: updated.lot_number,
       quantity_received: updated.quantity_received,
@@ -162,7 +180,7 @@ export default function App() {
   }
 
   async function deleteReagent(id) {
-    if (role !== "owner") return;
+    if (!can("delete")) return;
     if (!confirm("Remove this lot from the active inventory? It will stay in Reports for audit purposes.")) return;
     const item = reagents.find((r) => r.id === id);
     await supabase.from("reagents").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", id);
@@ -171,6 +189,7 @@ export default function App() {
   }
 
   async function saveEditedLog(updated, original) {
+    if (!can("edit")) return;
     const item = reagents.find((r) => r.id === original.reagent_id);
     if (item) {
       const delta = updated.amount - original.amount;
@@ -187,7 +206,7 @@ export default function App() {
   }
 
   async function deleteLog(log) {
-    if (role !== "owner") return;
+    if (!can("delete")) return;
     if (!confirm("Remove this log entry? The amount will be added back to stock, but it stays in Reports for audit purposes.")) return;
     const item = reagents.find((r) => r.id === log.reagent_id);
     if (item) await supabase.from("reagents").update({ current_quantity: item.current_quantity + log.amount }).eq("id", item.id);
@@ -222,6 +241,8 @@ export default function App() {
     loadAll();
   }
 
+  const warnDays = config?.expiry_warning_days ?? 30;
+
   const groups = useMemo(() => {
     if (!reagents) return [];
     const active = reagents.filter((r) => !r.deleted);
@@ -233,11 +254,11 @@ export default function App() {
     return Object.entries(map).map(([name, items]) => {
       const sorted = [...items].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
-      const worstStatus = items.some((i) => statusOf(i) === "red") ? "red" : items.some((i) => statusOf(i) === "yellow") ? "yellow" : "green";
+      const worstStatus = items.some((i) => statusOf(i, warnDays) === "red") ? "red" : items.some((i) => statusOf(i, warnDays) === "yellow") ? "yellow" : "green";
       const flagged = items.some(hasInspectionIssue);
       return { name, items: sorted, fefo: sorted[0], totalQty, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged };
     });
-  }, [reagents]);
+  }, [reagents, warnDays]);
 
   const counts = useMemo(() => {
     const c = { red: 0, yellow: 0, green: 0, flagged: 0 };
@@ -270,9 +291,15 @@ export default function App() {
         input, select { font-family: inherit; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #C7D1CE; border-radius: 4px; }
+        @media (max-width: 640px) {
+          .nav-label { display: none; }
+          .app-actions button { padding: 8px 10px !important; }
+          .app-actions .btn-text { display: none; }
+          main { padding-left: 12px !important; padding-right: 12px !important; }
+        }
       `}</style>
 
-      <Header tab={tab} setTab={setTab} role={role} onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)} onLogout={logout} onEnableNotif={enableNotifications} />
+      <Header tab={tab} setTab={setTab} role={role} can={can} onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)} onLogout={logout} onEnableNotif={enableNotifications} />
 
       <main style={{ maxWidth: 980, margin: "0 auto", padding: "24px 20px 80px" }}>
         {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
@@ -289,20 +316,22 @@ export default function App() {
           </div>
         )}
 
-        {tab === "dashboard" && <Dashboard groups={groups} counts={counts} departments={config.departments || []} role={role} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
-        {tab === "detail" && selectedGroup && (
+        {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
+        {tab === "detail" && can("dashboard") && selectedGroup && (
           <DetailView
             group={groups.find((g) => g.name === selectedGroup.name) || selectedGroup}
             logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.name === selectedGroup.name)?.items || []).some((i) => i.id === l.reagent_id))}
             role={role}
+            can={can}
+            warnDays={warnDays}
             onBack={() => setTab("dashboard")}
             onEditReagent={setEditReagent} onDeleteReagent={deleteReagent}
             onEditLog={setEditLog} onDeleteLog={deleteLog}
           />
         )}
-        {tab === "reports" && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
-        {tab === "settings" && (role === "owner" || role === "lab") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
-        {tab === "charts" && (role === "owner" || role === "lab") && <Charts reagents={reagents} logs={logs} />}
+        {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+        {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
+        {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
         {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
       </main>
 
@@ -315,7 +344,7 @@ export default function App() {
   );
 }
 
-function Header({ tab, setTab, role, onAdd, onLog, onLogout, onEnableNotif }) {
+function Header({ tab, setTab, role, can, onAdd, onLog, onLogout, onEnableNotif }) {
   return (
     <header style={{ borderBottom: "1px solid #D6DEDB", background: "#1B2B2E" }}>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -326,16 +355,16 @@ function Header({ tab, setTab, role, onAdd, onLog, onLogout, onEnableNotif }) {
             <div style={{ color: "#8FA39E", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }}>LTC Lab Inventory</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <NavBtn active={tab === "dashboard" || tab === "detail"} onClick={() => setTab("dashboard")} icon={<LayoutGrid size={15} />} label="Dashboard" />
-          <NavBtn active={tab === "reports"} onClick={() => setTab("reports")} icon={<FileText size={15} />} label="Reports" />
-          {(role === "owner" || role === "lab") && <NavBtn active={tab === "settings"} onClick={() => setTab("settings")} icon={<SlidersHorizontal size={15} />} label="Settings" />}
-          {(role === "owner" || role === "lab") && <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={<BarChart3 size={15} />} label="Charts" />}
+        <div className="app-actions" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {can("dashboard") && <NavBtn active={tab === "dashboard" || tab === "detail"} onClick={() => setTab("dashboard")} icon={<LayoutGrid size={15} />} label="Dashboard" />}
+          {can("reports") && <NavBtn active={tab === "reports"} onClick={() => setTab("reports")} icon={<FileText size={15} />} label="Reports" />}
+          {can("settings") && <NavBtn active={tab === "settings"} onClick={() => setTab("settings")} icon={<SlidersHorizontal size={15} />} label="Settings" />}
+          {can("charts") && <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={<BarChart3 size={15} />} label="Charts" />}
           {role === "owner" && <NavBtn active={tab === "deletions"} onClick={() => setTab("deletions")} icon={<History size={15} />} label="Activity" />}
           <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><Bell size={14} /></button>
           <div style={{ width: 1, height: 22, background: "#39494A", margin: "0 4px" }} />
-          <button onClick={onLog} style={{ background: "transparent", border: "1px solid #5FBFB0", color: "#5FBFB0", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><TrendingDown size={14} /> Log use</button>
-          <button onClick={onAdd} style={{ background: "#5FBFB0", border: "none", color: "#0B2023", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Receive stock</button>
+          {can("log_use") && <button onClick={onLog} title="Log use" style={{ background: "transparent", border: "1px solid #5FBFB0", color: "#5FBFB0", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><TrendingDown size={14} /> <span className="btn-text">Log use</span></button>}
+          {can("receive") && <button onClick={onAdd} title="Receive stock" style={{ background: "#5FBFB0", border: "none", color: "#0B2023", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> <span className="btn-text">Receive stock</span></button>}
           <button onClick={onLogout} title="Log out" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><LogOut size={14} /></button>
         </div>
       </div>
@@ -344,7 +373,7 @@ function Header({ tab, setTab, role, onAdd, onLog, onLogout, onEnableNotif }) {
 }
 
 function NavBtn({ active, onClick, icon, label }) {
-  return <button onClick={onClick} style={{ background: active ? "#2A3B3D" : "transparent", color: active ? "#F0F3F2" : "#8FA39E", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{icon} {label}</button>;
+  return <button onClick={onClick} title={label} style={{ background: active ? "#2A3B3D" : "transparent", color: active ? "#F0F3F2" : "#8FA39E", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{icon} <span className="nav-label">{label}</span></button>;
 }
 
 function StatCard({ status, count, label }) {
@@ -366,8 +395,9 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, role, onDeleteReagent, onSelect }) {
+function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect }) {
   const [search, setSearch] = useState("");
+  const [activeDept, setActiveDept] = useState("all");
 
   if (groups.length === 0) {
     return (
@@ -382,7 +412,9 @@ function Dashboard({ groups, counts, departments, role, onDeleteReagent, onSelec
   const filteredGroups = term
     ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.fefo.lot_number.toLowerCase().includes(term) || (g.fefo.device || "").toLowerCase().includes(term))
     : groups;
-  const byDept = departments.map((d) => ({ dept: d, items: filteredGroups.filter((g) => g.department === d) })).filter((x) => x.items.length);
+  const deptCounts = departments.map((d) => ({ dept: d, n: filteredGroups.filter((g) => g.department === d).length })).filter((x) => x.n > 0);
+  const visibleDepts = activeDept === "all" ? deptCounts.map((x) => x.dept) : [activeDept];
+  const byDept = visibleDepts.map((d) => ({ dept: d, items: filteredGroups.filter((g) => g.department === d) })).filter((x) => x.items.length);
 
   return (
     <div>
@@ -390,31 +422,41 @@ function Dashboard({ groups, counts, departments, role, onDeleteReagent, onSelec
         placeholder="Search reagent, lot number, or device…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        style={{ width: "100%", border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 14, marginBottom: 18, boxSizing: "border-box" }}
+        style={{ width: "100%", border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 16, marginBottom: 18, boxSizing: "border-box" }}
       />
-      <div style={{ display: "flex", gap: 12, marginBottom: 28, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <StatCard status="red" count={counts.red} label="Critical — expired or out" />
         <StatCard status="yellow" count={counts.yellow} label="Watch — expiring or low" />
         <StatCard status="green" count={counts.green} label="Stable" />
       </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 22, overflowX: "auto", paddingBottom: 2 }}>
+        <DeptPill active={activeDept === "all"} onClick={() => setActiveDept("all")} label="All" color="#516361" />
+        {deptCounts.map(({ dept, n }) => (
+          <DeptPill key={dept} active={activeDept === dept} onClick={() => setActiveDept(dept)} label={`${dept} · ${n}`} color={deptColor(dept, departments)} />
+        ))}
+      </div>
+
       {byDept.length === 0 && (
         <div style={{ textAlign: "center", padding: "40px 20px", color: "#8A9694", fontSize: 13.5 }}>No matches for "{search}".</div>
       )}
       {byDept.map(({ dept, items }) => (
         <div key={dept} style={{ marginBottom: 26 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: deptColor(dept, departments) }} />
-            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: 0.3 }}>{dept}</span>
-          </div>
+          {activeDept === "all" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: deptColor(dept, departments) }} />
+              <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: 0.3 }}>{dept}</span>
+            </div>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((g) => {
               const m = STATUS_META[g.status];
               const pct = (g.fefo.current_quantity / g.fefo.quantity_received) * 100;
               const dExp = daysBetween(g.fefo.expiry_date, todayISO());
               return (
-                <div key={g.name} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", gap: 16, background: "#fff", border: "1px solid #E1E8E5", borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer" }}>
+                <div key={g.name} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: "#fff", border: "1px solid #E1E8E5", borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
                   <GaugeBar pct={pct} color={m.color} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 140 }}>
                     <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
                       {g.name}
                       {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
@@ -427,7 +469,7 @@ function Dashboard({ groups, counts, departments, role, onDeleteReagent, onSelec
                     <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
                     <div style={{ fontSize: 11.5, color: "#8A9694" }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
                   </div>
-                  {role === "owner" && (
+                  {can("delete") && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }}
                       title="Remove this lot"
@@ -447,7 +489,28 @@ function Dashboard({ groups, counts, departments, role, onDeleteReagent, onSelec
   );
 }
 
-function DetailView({ group, logs, role, onBack, onEditReagent, onDeleteReagent, onEditLog, onDeleteLog }) {
+function DeptPill({ active, onClick, label, color }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flexShrink: 0,
+        background: active ? color : "#fff",
+        color: active ? "#fff" : "#3A4A48",
+        border: `1px solid ${active ? color : "#D6DEDB"}`,
+        borderRadius: 20,
+        padding: "7px 14px",
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onEditLog, onDeleteLog }) {
   const last30 = logs.filter((l) => daysBetween(todayISO(), l.date) <= 30);
   const consumed30 = last30.reduce((s, l) => s + l.amount, 0);
   const avgDaily = consumed30 / 30;
@@ -486,7 +549,7 @@ function DetailView({ group, logs, role, onBack, onEditReagent, onDeleteReagent,
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 26 }}>
         {group.items.map((it, idx) => {
           const dExp = daysBetween(it.expiry_date, todayISO());
-          const m = STATUS_META[statusOf(it)];
+          const m = STATUS_META[statusOf(it, warnDays)];
           const failedItems = INSPECTION_KEYS.filter((k) => it[k] === false).map((k) => inspectionLabels[k]);
           return (
             <div key={it.id} style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "10px 14px" }}>
@@ -495,8 +558,8 @@ function DetailView({ group, logs, role, onBack, onEditReagent, onDeleteReagent,
                 <div style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>Lot {it.lot_number}</div>
                 <div style={{ fontSize: 13 }}>{it.current_quantity}/{it.quantity_received} {it.unit}</div>
                 <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
-                <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>
-                {role === "owner" && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
+                {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
+                {can("delete") && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
               </div>
               {failedItems.length > 0 && (
                 <div style={{ marginTop: 8, background: "#FBF3DF", border: "1px solid #B8860B33", borderRadius: 6, padding: "6px 10px", fontSize: 11.5, color: "#7A5C08" }}>
@@ -523,8 +586,8 @@ function DetailView({ group, logs, role, onBack, onEditReagent, onDeleteReagent,
             <div style={{ flex: 1 }}>−{l.amount} {group.unit}</div>
             <div style={{ color: "#7B8E8A", display: "flex", alignItems: "center", gap: 4 }}><Users size={12} /> {l.used_by}</div>
             <div style={{ fontSize: 11, color: l.tested_by_qc ? "#2F6B4F" : "#8A9694", fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
-            <button onClick={() => onEditLog(l)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={13} /></button>
-            {role === "owner" && <button onClick={() => onDeleteLog(l)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={13} /></button>}
+            {can("edit") && <button onClick={() => onEditLog(l)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={13} /></button>}
+            {can("delete") && <button onClick={() => onDeleteLog(l)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={13} /></button>}
           </div>
         ))}
       </div>
@@ -751,7 +814,7 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 14, marginTop: 4, boxSizing: "border-box" };
+const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
 function LogConsumptionModal({ reagents, onClose, onSubmit }) {

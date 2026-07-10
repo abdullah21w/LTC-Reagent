@@ -10,7 +10,7 @@ const INSPECTION_ITEMS = [
   { key: "storage_condition_ok", label: "Storage condition during transport" },
 ];
 
-const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 14, marginTop: 4, boxSizing: "border-box" };
+const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
 export default function ReceiveWizard({ presets, devices, role, departments, onClose, onSubmit }) {

@@ -50,18 +50,19 @@ create table if not exists consumption_logs (
 
 create table if not exists app_config (
   id int primary key default 1,
-  lab_username text not null default '',
-  lab_password text not null default '',
   owner_username text not null default '',
   owner_password text not null default '',
   low_stock_default_percent numeric not null default 15,
+  expiry_warning_days int not null default 30,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 
--- IMPORTANT: replace the CHANGE_ME placeholders below with your own
--- owner + lab username/password BEFORE running this file.
-insert into app_config (id, owner_username, owner_password, lab_username, lab_password)
-values (1, 'CHANGE_ME_owner_user', 'CHANGE_ME_owner_pass', 'CHANGE_ME_lab_user', 'CHANGE_ME_lab_pass')
+-- IMPORTANT: replace the CHANGE_ME placeholders below with your own owner
+-- username/password BEFORE running this file. This is the ONLY built-in
+-- login — every other account is created by the owner from Settings, with
+-- custom permissions per account.
+insert into app_config (id, owner_username, owner_password)
+values (1, 'CHANGE_ME_owner_user', 'CHANGE_ME_owner_pass')
 on conflict (id) do nothing;
 
 create table if not exists reagent_presets (
@@ -76,6 +77,7 @@ create table if not exists staff_accounts (
   id uuid primary key default gen_random_uuid(),
   username text not null unique,
   password text not null,
+  permissions jsonb not null default '{"dashboard":true,"reports":true,"charts":false,"settings":false,"receive":false,"log_use":false,"edit":false,"delete":false}'::jsonb,
   created_at timestamptz default now()
 );
 
