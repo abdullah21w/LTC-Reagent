@@ -13,14 +13,14 @@ const INSPECTION_ITEMS = [
 const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
-export default function ReceiveWizard({ presets, devices, role, departments, onClose, onSubmit }) {
+export default function ReceiveWizard({ presets, devices, role, username, departments, onClose, onSubmit }) {
   const [step, setStep] = useState(1);
   const [showScanner, setShowScanner] = useState(false);
 
   const [form, setForm] = useState({
     name: "", department: departments[0] || "", unit: "mL", itemType: "Reagent", device: "",
     lotNumber: "", quantityReceived: "", expiryDate: "",
-    receivedBy: "", receivedDate: new Date().toISOString().slice(0, 10),
+    receivedBy: username || "", receivedDate: new Date().toISOString().slice(0, 10),
     lowStockThreshold: "",
     intact_container: true,
     complete_compound: true,
@@ -91,7 +91,9 @@ export default function ReceiveWizard({ presets, devices, role, departments, onC
                 <option value="Cal">Cal</option>
               </select>
             </label>
-            <label style={labelStyle}>Received by (your name)<input style={inputStyle} value={form.receivedBy} onChange={set("receivedBy")} /></label>
+            <label style={labelStyle}>Received by
+              <div style={{ ...inputStyle, background: "#F0F3F2", color: "#516361", display: "flex", alignItems: "center" }}>{username}</div>
+            </label>
             <label style={labelStyle}>Date of receipt<input type="date" style={inputStyle} value={form.receivedDate} onChange={set("receivedDate")} /></label>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
               <label style={{ ...labelStyle, flex: 1 }}>Lot number<input style={inputStyle} value={form.lotNumber} onChange={set("lotNumber")} /></label>

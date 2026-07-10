@@ -9,12 +9,12 @@ export default function Login({ config, staffAccounts, onLogin }) {
   function submit(e) {
     e.preventDefault();
     if (username === config.owner_username && password === config.owner_password) {
-      onLogin("owner", username, null);
+      onLogin("owner", username, null, null);
       return;
     }
     const staffMatch = (staffAccounts || []).find((s) => s.username === username && s.password === password);
     if (staffMatch) {
-      onLogin("staff", username, staffMatch.permissions || {});
+      onLogin("staff", username, staffMatch.permissions || {}, staffMatch.id);
       return;
     }
     setError("Incorrect username or password.");

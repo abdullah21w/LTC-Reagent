@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3 } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import Settings from "./Settings";
@@ -46,6 +46,7 @@ export default function App() {
   const [perms, setPerms] = useState(() => {
     try { return JSON.parse(localStorage.getItem("reagent_perms")) || null; } catch { return null; }
   });
+  const [accountId, setAccountId] = useState(() => localStorage.getItem("reagent_account_id") || null);
   const can = (key) => role === "owner" || !!(perms && perms[key]);
   const [reagents, setReagents] = useState(null);
   const [logs, setLogs] = useState(null);
@@ -56,6 +57,7 @@ export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [showWizard, setShowWizard] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [editReagent, setEditReagent] = useState(null);
   const [editLog, setEditLog] = useState(null);
@@ -102,14 +104,17 @@ export default function App() {
     loadAll();
   }, []);
 
-  function handleLogin(newRole, newUsername, newPerms) {
+  function handleLogin(newRole, newUsername, newPerms, newAccountId) {
     const effectivePerms = newRole === "owner" ? FULL_PERMISSIONS : (newPerms || {});
     localStorage.setItem("reagent_role", newRole);
     localStorage.setItem("reagent_username", newUsername);
     localStorage.setItem("reagent_perms", JSON.stringify(effectivePerms));
+    if (newAccountId) localStorage.setItem("reagent_account_id", newAccountId);
+    else localStorage.removeItem("reagent_account_id");
     setRole(newRole);
     setUsername(newUsername);
     setPerms(effectivePerms);
+    setAccountId(newAccountId || null);
     const order = ["dashboard", "reports", "charts", "settings"];
     const firstTab = order.find((t) => newRole === "owner" || effectivePerms[t]) || "dashboard";
     setTab(firstTab);
@@ -118,9 +123,28 @@ export default function App() {
     localStorage.removeItem("reagent_role");
     localStorage.removeItem("reagent_username");
     localStorage.removeItem("reagent_perms");
+    localStorage.removeItem("reagent_account_id");
     setRole(null);
     setUsername("");
     setPerms(null);
+    setAccountId(null);
+  }
+
+  async function changeOwnPassword(currentPassword, newPassword) {
+    if (role === "owner") {
+      if (currentPassword !== config.owner_password) return "Current password is incorrect.";
+      const { error } = await supabase.from("app_config").update({ owner_password: newPassword }).eq("id", 1);
+      if (error) return "Could not save the new password.";
+      ensureConfig();
+      return null;
+    }
+    const mine = staffAccounts.find((s) => s.id === accountId);
+    if (!mine) return "Could not find your account.";
+    if (currentPassword !== mine.password) return "Current password is incorrect.";
+    const { error } = await supabase.from("staff_accounts").update({ password: newPassword }).eq("id", accountId);
+    if (error) return "Could not save the new password.";
+    loadAll();
+    return null;
   }
 
   async function addReagent(entry) {
@@ -299,7 +323,7 @@ export default function App() {
         }
       `}</style>
 
-      <Header tab={tab} setTab={setTab} role={role} can={can} onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)} onLogout={logout} onEnableNotif={enableNotifications} />
+      <Header tab={tab} setTab={setTab} role={role} can={can} onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)} onLogout={logout} onEnableNotif={enableNotifications} onChangePassword={() => setShowChangePassword(true)} />
 
       <main style={{ maxWidth: 980, margin: "0 auto", padding: "24px 20px 80px" }}>
         {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
@@ -335,16 +359,17 @@ export default function App() {
         {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
       </main>
 
-      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} departments={config.departments || []} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
-      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
+      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
+      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
       {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#C1432B", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
     </div>
   );
 }
 
-function Header({ tab, setTab, role, can, onAdd, onLog, onLogout, onEnableNotif }) {
+function Header({ tab, setTab, role, can, onAdd, onLog, onLogout, onEnableNotif, onChangePassword }) {
   return (
     <header style={{ borderBottom: "1px solid #D6DEDB", background: "#1B2B2E" }}>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -365,6 +390,7 @@ function Header({ tab, setTab, role, can, onAdd, onLog, onLogout, onEnableNotif 
           <div style={{ width: 1, height: 22, background: "#39494A", margin: "0 4px" }} />
           {can("log_use") && <button onClick={onLog} title="Log use" style={{ background: "transparent", border: "1px solid #5FBFB0", color: "#5FBFB0", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><TrendingDown size={14} /> <span className="btn-text">Log use</span></button>}
           {can("receive") && <button onClick={onAdd} title="Receive stock" style={{ background: "#5FBFB0", border: "none", color: "#0B2023", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> <span className="btn-text">Receive stock</span></button>}
+          <button onClick={onChangePassword} title="Change my password" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><KeyRound size={14} /></button>
           <button onClick={onLogout} title="Log out" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><LogOut size={14} /></button>
         </div>
       </div>
@@ -817,14 +843,14 @@ function Modal({ title, onClose, children }) {
 const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
-function LogConsumptionModal({ reagents, onClose, onSubmit }) {
+function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
   const [typeFilter, setTypeFilter] = useState("");
   const filteredReagents = typeFilter ? reagents.filter((r) => r.item_type === typeFilter) : reagents;
   const names = [...new Set(filteredReagents.map((r) => r.name))];
   const [name, setName] = useState(names[0] || "");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayISO());
-  const [usedBy, setUsedBy] = useState("");
+  const usedBy = username;
   const [note, setNote] = useState("");
   const [testedByQC, setTestedByQC] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -884,7 +910,9 @@ function LogConsumptionModal({ reagents, onClose, onSubmit }) {
           <label style={{ ...labelStyle, flex: 1 }}>Amount used ({fefo?.unit || "unit"})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
-        <label style={labelStyle}>Used by<input style={inputStyle} value={usedBy} onChange={(e) => setUsedBy(e.target.value)} placeholder="Your name" /></label>
+        <label style={labelStyle}>Used by
+          <div style={{ ...inputStyle, background: "#F0F3F2", color: "#516361", display: "flex", alignItems: "center" }}>{usedBy}</div>
+        </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
         <button onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Save log</button>
@@ -928,6 +956,39 @@ function EditLogModal({ log, onClose, onSave }) {
         <label style={labelStyle}>Note<input style={inputStyle} value={form.note || ""} onChange={set("note")} /></label>
         <YesNoRow label="Tested by QC" value={form.tested_by_qc} onChange={(v) => setForm((f) => ({ ...f, tested_by_qc: v }))} />
         <button onClick={() => onSave({ ...form, amount: Number(form.amount) }, log)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Save changes</button>
+      </div>
+    </Modal>
+  );
+}
+
+function ChangePasswordModal({ onClose, onSave }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [msg, setMsg] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit() {
+    if (!current || !next) { setMsg("Fill in both fields."); return; }
+    if (next !== confirm) { setMsg("New passwords don't match."); return; }
+    setSaving(true);
+    const err = await onSave(current, next);
+    setSaving(false);
+    if (err) { setMsg(err); return; }
+    setMsg("Password changed.");
+    setTimeout(onClose, 1200);
+  }
+
+  return (
+    <Modal title="Change my password" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <label style={labelStyle}>Current password<input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} /></label>
+        <label style={labelStyle}>New password<input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} /></label>
+        <label style={labelStyle}>Confirm new password<input type="password" style={inputStyle} value={confirm} onChange={(e) => setConfirm(e.target.value)} /></label>
+        {msg && <div style={{ fontSize: 12.5, color: msg === "Password changed." ? "#2F6B4F" : "#C1432B" }}>{msg}</div>}
+        <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>
+          {saving ? "Saving…" : "Save new password"}
+        </button>
       </div>
     </Modal>
   );
