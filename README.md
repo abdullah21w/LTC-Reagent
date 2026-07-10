@@ -51,3 +51,12 @@
 
 ## دومين خاص (اختياري)
 Vercel → Project → Settings → Domains → أضف الدومين اللي تملكه.
+
+## صفحة بيضاء / التطبيق ما يفتح؟
+صار فيه حماية جديدة: أي خطأ بالتطبيق يطلع لك كنص مكتوب على الشاشة (مو صفحة بيضاء)، مع زر "Copy error" — انسخه وارسله وأنا أشوف المشكلة بالضبط، حتى من الجوال بدون F12.
+
+السبب الأشهر للصفحة البيضاء هو أن `VITE_SUPABASE_URL` أو `VITE_SUPABASE_ANON_KEY` ناقصة أو غلط في Vercel. تأكد منها كذا:
+1. Vercel → Project → Settings → Environment Variables
+2. تأكد إن فيه بالضبط: `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` (نفس الاسم بالضبط، حساس لحالة الأحرف)
+3. القيم مأخوذة من Supabase → Project Settings → Data API (الـ URL) و API Keys (الـ Publishable key)
+4. بعد أي تعديل على Environment Variables، لازم تعمل **Redeploy** يدوي (مو بس حفظ) عشان تنطبق
