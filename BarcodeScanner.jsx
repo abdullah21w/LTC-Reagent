@@ -4,7 +4,25 @@ import { X, Camera } from "lucide-react";
 export default function BarcodeScanner({ onDetected, onClose }) {
   const containerRef = useRef(null);
   const scannerRef = useRef(null);
+  const stoppedRef = useRef(false);
   const [error, setError] = useState("");
+
+  async function safeStop() {
+    if (stoppedRef.current) return;
+    stoppedRef.current = true;
+    const scanner = scannerRef.current;
+    if (!scanner) return;
+    try {
+      await scanner.stop();
+    } catch {
+      // Already stopped/never fully started — safe to ignore.
+    }
+    try {
+      scanner.clear();
+    } catch {
+      // No-op if there's nothing to clear.
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -19,8 +37,7 @@ export default function BarcodeScanner({ onDetected, onClose }) {
             { facingMode: "environment" },
             { fps: 10, qrbox: { width: 240, height: 140 } },
             (decodedText) => {
-              scanner.stop().catch(() => {});
-              onDetected(decodedText);
+              safeStop().finally(() => onDetected(decodedText));
             },
             () => {}
           )
@@ -30,16 +47,17 @@ export default function BarcodeScanner({ onDetected, onClose }) {
 
     return () => {
       cancelled = true;
-      if (scannerRef.current) scannerRef.current.stop().catch(() => {});
+      safeStop();
     };
-  }, [onDetected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,25,26,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 16 }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 380, padding: 18 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Camera size={16} /> Scan barcode or QR</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#8A9694" }}><X size={18} /></button>
+          <button onClick={() => { safeStop(); onClose(); }} style={{ background: "none", border: "none", color: "#8A9694" }}><X size={18} /></button>
         </div>
         <div id="barcode-scanner-view" ref={containerRef} style={{ width: "100%", borderRadius: 8, overflow: "hidden", background: "#000", minHeight: 220 }} />
         {error && <div style={{ color: "#C1432B", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
