@@ -272,15 +272,17 @@ export default function App() {
     const active = reagents.filter((r) => !r.deleted);
     const map = {};
     for (const r of active) {
-      if (!map[r.name]) map[r.name] = [];
-      map[r.name].push(r);
+      const key = `${r.name}::${r.device || ""}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(r);
     }
-    return Object.entries(map).map(([name, items]) => {
+    return Object.entries(map).map(([key, items]) => {
       const sorted = [...items].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
+      const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
       const worstStatus = items.some((i) => statusOf(i, warnDays) === "red") ? "red" : items.some((i) => statusOf(i, warnDays) === "yellow") ? "yellow" : "green";
       const flagged = items.some(hasInspectionIssue);
-      return { name, items: sorted, fefo: sorted[0], totalQty, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged };
+      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged };
     });
   }, [reagents, warnDays]);
 
@@ -350,8 +352,8 @@ export default function App() {
         {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
         {tab === "detail" && can("dashboard") && selectedGroup && (
           <DetailView
-            group={groups.find((g) => g.name === selectedGroup.name) || selectedGroup}
-            logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.name === selectedGroup.name)?.items || []).some((i) => i.id === l.reagent_id))}
+            group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
+            logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.key === selectedGroup.key)?.items || []).some((i) => i.id === l.reagent_id))}
             role={role}
             can={can}
             warnDays={warnDays}
@@ -484,18 +486,21 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((g) => {
               const m = STATUS_META[g.status];
-              const pct = (g.fefo.current_quantity / g.fefo.quantity_received) * 100;
+              const pct = g.totalReceived > 0 ? (g.totalQty / g.totalReceived) * 100 : 0;
               const dExp = daysBetween(g.fefo.expiry_date, todayISO());
               return (
-                <div key={g.name} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: "#fff", border: "1px solid #E1E8E5", borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
+                <div key={g.key} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: "#fff", border: "1px solid #E1E8E5", borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
                   <GaugeBar pct={pct} color={m.color} />
                   <div style={{ flex: 1, minWidth: 140 }}>
-                    <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       {g.name}
+                      {g.device && (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#0F7173", background: "#E4F4F1", borderRadius: 5, padding: "2px 6px" }}>{g.device}</span>
+                      )}
                       {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
                     </div>
                     <div style={{ fontSize: 12.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
-                      Lot {g.fefo.lot_number} · {g.fefo.current_quantity} {g.unit} left · {g.items.length > 1 ? `${g.items.length} lots` : "1 lot"}{g.fefo.device ? ` · ${g.fefo.device}` : ""}
+                      {g.totalQty} {g.unit} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -561,7 +566,7 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
     <div>
       <button onClick={onBack} style={{ background: "none", border: "none", color: "#0F7173", fontSize: 13, fontWeight: 600, marginBottom: 18, display: "flex", alignItems: "center", gap: 4 }}>← Back to dashboard</button>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{group.name}</h2>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20, fontFamily: "'IBM Plex Mono', monospace" }}>{group.department} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)</div>
+      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20, fontFamily: "'IBM Plex Mono', monospace" }}>{group.department}{group.device ? ` · ${group.device}` : ""} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)</div>
 
       <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
         <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>
