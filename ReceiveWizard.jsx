@@ -13,7 +13,7 @@ const INSPECTION_ITEMS = [
 const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
-export default function ReceiveWizard({ presets, devices, role, username, departments, onClose, onSubmit }) {
+export default function ReceiveWizard({ presets, devices, role, username, departments, defaultLowStock, onClose, onSubmit }) {
   const [step, setStep] = useState(1);
   const [showScanner, setShowScanner] = useState(false);
 
@@ -52,7 +52,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
     onSubmit({
       ...form,
       quantityReceived: Number(form.quantityReceived),
-      lowStockThreshold: Number(form.lowStockThreshold) || Math.ceil(Number(form.quantityReceived) * 0.15),
+      lowStockThreshold: Number(form.lowStockThreshold) || Number(defaultLowStock) || 5,
     });
   }
 
@@ -105,7 +105,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
             <label style={labelStyle}>Expiry date<input type="date" style={inputStyle} value={form.expiryDate} onChange={set("expiryDate")} /></label>
             <div style={{ display: "flex", gap: 10 }}>
               <label style={{ ...labelStyle, flex: 1 }}>Quantity received<input type="number" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
-              <label style={{ ...labelStyle, flex: 1 }}>Low stock alert below<input type="number" style={inputStyle} value={form.lowStockThreshold} onChange={set("lowStockThreshold")} placeholder="auto" /></label>
+              <label style={{ ...labelStyle, flex: 1 }}>Low stock alert below<input type="number" style={inputStyle} value={form.lowStockThreshold} onChange={set("lowStockThreshold")} placeholder={`default: ${defaultLowStock || 5}`} /></label>
             </div>
             <label style={labelStyle}>Notes (optional)
               <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={form.receivingNotes} onChange={set("receivingNotes")} placeholder="Any additional comment about this delivery" />

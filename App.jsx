@@ -386,7 +386,7 @@ export default function App() {
         {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
       </main>
 
-      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
+      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}

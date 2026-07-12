@@ -304,8 +304,9 @@ export default function Settings({ config, presets, role, staffAccounts, devices
               <label style={{ ...labelStyle, flex: 1 }}>Owner username<input style={inputStyle} value={creds.owner_username} onChange={(e) => setCreds((c) => ({ ...c, owner_username: e.target.value }))} /></label>
               <label style={{ ...labelStyle, flex: 1 }}>Owner password<input style={inputStyle} value={creds.owner_password} onChange={(e) => setCreds((c) => ({ ...c, owner_password: e.target.value }))} /></label>
             </div>
-            <label style={labelStyle}>Default low-stock alert (% of quantity received)
-              <input type="number" style={inputStyle} value={creds.low_stock_default_percent} onChange={(e) => setCreds((c) => ({ ...c, low_stock_default_percent: Number(e.target.value) }))} />
+            <label style={labelStyle}>Default low-stock alert (units remaining)
+              <input type="number" min="1" style={inputStyle} value={creds.low_stock_default_percent} onChange={(e) => setCreds((c) => ({ ...c, low_stock_default_percent: Number(e.target.value) }))} />
+              <div style={{ fontSize: 11.5, color: "#8A9694", fontWeight: 400, marginTop: 4 }}>New reagents get this as their default "low stock" number unless you type a different one at receiving time.</div>
             </label>
             <label style={labelStyle}>Expiry warning threshold (days before expiry to mark "Watch")
               <input type="number" min="1" style={inputStyle} value={creds.expiry_warning_days} onChange={(e) => setCreds((c) => ({ ...c, expiry_warning_days: Number(e.target.value) }))} />
