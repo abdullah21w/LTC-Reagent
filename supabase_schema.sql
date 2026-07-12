@@ -54,6 +54,8 @@ create table if not exists app_config (
   owner_password text not null default '',
   low_stock_default_percent numeric not null default 15,
   expiry_warning_days int not null default 30,
+  alert_email text not null default '',
+  expiry_alert_days jsonb not null default '[3, 1]'::jsonb,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 

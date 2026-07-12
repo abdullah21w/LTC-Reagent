@@ -75,8 +75,22 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     owner_password: config.owner_password,
     low_stock_default_percent: config.low_stock_default_percent,
     expiry_warning_days: config.expiry_warning_days ?? 30,
+    alert_email: config.alert_email || "",
   });
+  const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
+  const [newAlertDay, setNewAlertDay] = useState("");
   const [msg, setMsg] = useState("");
+
+  function addAlertDay() {
+    const n = Number(newAlertDay);
+    if (!n || n <= 0 || alertDays.includes(n)) { setNewAlertDay(""); return; }
+    setAlertDays((d) => [...d, n].sort((a, b) => b - a));
+    setNewAlertDay("");
+  }
+
+  function removeAlertDay(n) {
+    setAlertDays((d) => d.filter((x) => x !== n));
+  }
 
   async function addDevice() {
     if (!newDevice.name) return;
@@ -142,7 +156,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   }
 
   async function saveCreds() {
-    const { error } = await supabase.from("app_config").update(creds).eq("id", 1);
+    const { error } = await supabase.from("app_config").update({ ...creds, expiry_alert_days: alertDays }).eq("id", 1);
     setMsg(error ? "Could not save." : "Saved.");
     reload();
     setTimeout(() => setMsg(""), 2500);
@@ -317,8 +331,48 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>
 
-          <div style={{ fontSize: 11.5, color: "#8A9694", marginTop: 14 }}>
+          <div style={{ fontSize: 11.5, color: "#8A9694", marginTop: 14, marginBottom: 30 }}>
             Note: these credentials are stored as plain text and are visible to anyone with the app link — fine for internal use, not for sensitive data.
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EXPIRY EMAIL ALERTS</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            Once a day, one combined email lists every reagent that hit an alert point below. Leave the email blank to turn this off.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={labelStyle}>Send alerts to
+              <input type="email" style={inputStyle} placeholder="you@example.com" value={creds.alert_email} onChange={(e) => setCreds((c) => ({ ...c, alert_email: e.target.value }))} />
+            </label>
+            <div>
+              <div style={labelStyle}>Alert this many days before expiry</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, marginBottom: 8 }}>
+                {alertDays.length === 0 && <span style={{ fontSize: 12.5, color: "#8A9694" }}>No alert points yet — add one below.</span>}
+                {alertDays.map((n) => (
+                  <span key={n} style={{ display: "flex", alignItems: "center", gap: 6, background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 20, padding: "5px 6px 5px 12px", fontSize: 12.5, fontWeight: 600, color: "#0F5F5B" }}>
+                    {n} day{n === 1 ? "" : "s"} before
+                    <button onClick={() => removeAlertDay(n)} style={{ background: "none", border: "none", color: "#0F5F5B", display: "flex" }}><Trash2 size={12} /></button>
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 7"
+                  value={newAlertDay}
+                  onChange={(e) => setNewAlertDay(e.target.value)}
+                  style={{ ...inputStyle, marginTop: 0, flex: 1 }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAlertDay(); } }}
+                />
+                <button onClick={addAlertDay} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "0 14px", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Plus size={14} /> Add
+                </button>
+              </div>
+            </div>
+            <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Save size={14} /> Save alert settings
+            </button>
+            {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>
         </>
       )}
