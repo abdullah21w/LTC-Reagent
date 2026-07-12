@@ -920,6 +920,8 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
   const filteredReagents = typeFilter ? reagents.filter((r) => r.item_type === typeFilter) : reagents;
   const names = [...new Set(filteredReagents.map((r) => r.name))];
   const [name, setName] = useState(names[0] || "");
+  const devicesForName = [...new Set(reagents.filter((r) => r.name === name).map((r) => r.device || ""))];
+  const [device, setDevice] = useState(devicesForName[0] || "");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayISO());
   const usedBy = username;
@@ -927,19 +929,28 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
   const [testedByQC, setTestedByQC] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
-  const lots = reagents.filter((r) => r.name === name).sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
+  const lots = reagents.filter((r) => r.name === name && (r.device || "") === device).sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
   const fefo = lots[0];
 
   function changeType(t) {
     setTypeFilter(t);
     const list = t ? reagents.filter((r) => r.item_type === t) : reagents;
     const firstName = [...new Set(list.map((r) => r.name))][0] || "";
-    setName(firstName);
+    changeName(firstName);
+  }
+
+  function changeName(newName) {
+    setName(newName);
+    const opts = [...new Set(reagents.filter((r) => r.name === newName).map((r) => r.device || ""))];
+    setDevice(opts[0] || "");
   }
 
   function handleScan(text) {
     const match = reagents.find((r) => r.lot_number === text);
-    if (match) setName(match.name);
+    if (match) {
+      setName(match.name);
+      setDevice(match.device || "");
+    }
     setShowScanner(false);
   }
 
@@ -965,7 +976,7 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
         </label>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
           <label style={{ ...labelStyle, flex: 1 }}>Reagent (type to search)
-            <input list="log-use-names" style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Search reagent name" />
+            <input list="log-use-names" style={inputStyle} value={name} onChange={(e) => changeName(e.target.value)} placeholder="Search reagent name" />
             <datalist id="log-use-names">
               {names.map((n) => <option key={n} value={n} />)}
             </datalist>
@@ -973,6 +984,14 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
           <button type="button" onClick={() => setShowScanner(true)} style={{ background: "#F0F3F2", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 10px" }}><ScanLine size={16} /></button>
         </div>
         {names.length === 0 && <div style={{ fontSize: 12.5, color: "#8A9694" }}>No items of this type in stock.</div>}
+        {devicesForName.some(Boolean) && (
+          <label style={labelStyle}>Device used
+            <select style={inputStyle} value={device} onChange={(e) => setDevice(e.target.value)}>
+              {devicesForName.map((d) => <option key={d || "none"} value={d}>{d || "No device specified"}</option>)}
+            </select>
+          </label>
+        )}
+        {name && !fefo && <div style={{ fontSize: 12.5, color: "#C1432B" }}>No stock of "{name}" on this device.</div>}
         {fefo && (
           <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#0F5F5B" }}>
             FEFO suggests <b>Lot {fefo.lot_number}</b> ({fefo.current_quantity} {fefo.unit} left, expires {fefo.expiry_date}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}
@@ -987,7 +1006,7 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
         </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
-        <button onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Save log</button>
+        <button onClick={submit} disabled={!fefo} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: fefo ? 1 : 0.5 }}>Save log</button>
       </div>
       {showScanner && <BarcodeScanner onClose={() => setShowScanner(false)} onDetected={handleScan} />}
     </Modal>
