@@ -26,10 +26,6 @@ function statusOf(item, warnDays = 30) {
   return "green";
 }
 
-function isLowStockItem(item) {
-  return item.current_quantity > 0 && item.current_quantity <= item.low_stock_threshold;
-}
-
 function isExpiringSoonItem(item, warnDays) {
   const dExp = daysBetween(item.expiry_date, todayISO());
   return dExp >= 0 && dExp <= warnDays;
@@ -291,10 +287,11 @@ export default function App() {
       const sorted = [...items].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
       const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
-      const worstStatus = items.some((i) => statusOf(i, warnDays) === "red") ? "red" : items.some((i) => statusOf(i, warnDays) === "yellow") ? "yellow" : "green";
+      const anyExpiredOrEmpty = items.some((i) => daysBetween(i.expiry_date, todayISO()) < 0 || i.current_quantity <= 0);
       const flagged = items.some(hasInspectionIssue);
-      const lowStock = items.some(isLowStockItem);
+      const lowStock = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
       const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
+      const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
       return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, expiringSoon };
     });
   }, [reagents, warnDays]);
