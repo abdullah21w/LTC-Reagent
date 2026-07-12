@@ -26,6 +26,15 @@ function statusOf(item, warnDays = 30) {
   return "green";
 }
 
+function isLowStockItem(item) {
+  return item.current_quantity > 0 && item.current_quantity <= item.low_stock_threshold;
+}
+
+function isExpiringSoonItem(item, warnDays) {
+  const dExp = daysBetween(item.expiry_date, todayISO());
+  return dExp >= 0 && dExp <= warnDays;
+}
+
 function hasInspectionIssue(item) {
   return INSPECTION_KEYS.some((k) => item[k] === false);
 }
@@ -34,6 +43,8 @@ const STATUS_META = {
   red: { label: "Critical", color: "#C1432B", bg: "#FBEAE6" },
   yellow: { label: "Watch", color: "#B8860B", bg: "#FBF3DF" },
   green: { label: "Stable", color: "#2F6B4F", bg: "#E8F2EC" },
+  low: { label: "Low stock", color: "#B8860B", bg: "#FBF3DF" },
+  expiring: { label: "Expiring soon", color: "#8A5A2B", bg: "#FBF0E4" },
 };
 
 const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true };
@@ -282,13 +293,20 @@ export default function App() {
       const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
       const worstStatus = items.some((i) => statusOf(i, warnDays) === "red") ? "red" : items.some((i) => statusOf(i, warnDays) === "yellow") ? "yellow" : "green";
       const flagged = items.some(hasInspectionIssue);
-      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged };
+      const lowStock = items.some(isLowStockItem);
+      const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
+      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, expiringSoon };
     });
   }, [reagents, warnDays]);
 
   const counts = useMemo(() => {
-    const c = { red: 0, yellow: 0, green: 0, flagged: 0 };
-    groups.forEach((g) => { c[g.status]++; if (g.flagged) c.flagged++; });
+    const c = { red: 0, yellow: 0, green: 0, flagged: 0, lowStock: 0, expiringSoon: 0 };
+    groups.forEach((g) => {
+      c[g.status]++;
+      if (g.flagged) c.flagged++;
+      if (g.lowStock) c.lowStock++;
+      if (g.expiringSoon) c.expiringSoon++;
+    });
     return c;
   }, [groups]);
 
@@ -411,13 +429,25 @@ function NavBtn({ active, onClick, icon, label }) {
   return <button onClick={onClick} title={label} style={{ background: active ? "#2A3B3D" : "transparent", color: active ? "#F0F3F2" : "#8FA39E", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{icon} <span className="nav-label">{label}</span></button>;
 }
 
-function StatCard({ status, count, label }) {
+function StatCard({ status, count, label, active, onClick }) {
   const m = STATUS_META[status];
   return (
-    <div style={{ background: m.bg, border: `1px solid ${m.color}22`, borderRadius: 10, padding: "16px 18px", flex: 1, minWidth: 140 }}>
+    <button
+      onClick={onClick}
+      style={{
+        background: m.bg,
+        border: `1.5px solid ${active ? m.color : m.color + "22"}`,
+        borderRadius: 10,
+        padding: "16px 18px",
+        flex: 1,
+        minWidth: 140,
+        textAlign: "left",
+        boxShadow: active ? `0 0 0 2px ${m.color}33` : "none",
+      }}
+    >
       <div style={{ fontSize: 28, fontWeight: 700, color: m.color, fontFamily: "'IBM Plex Mono', monospace" }}>{count}</div>
       <div style={{ fontSize: 13, color: "#516361", fontWeight: 500 }}>{label}</div>
-    </div>
+    </button>
   );
 }
 
@@ -433,6 +463,8 @@ function GaugeBar({ pct, color }) {
 function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
+  const [deviceFilter, setDeviceFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   if (groups.length === 0) {
     return (
@@ -443,26 +475,49 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
       </div>
     );
   }
+
+  const allDevices = [...new Set(groups.map((g) => g.device).filter(Boolean))].sort();
+
   const term = search.trim().toLowerCase();
-  const filteredGroups = term
-    ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.fefo.lot_number.toLowerCase().includes(term) || (g.fefo.device || "").toLowerCase().includes(term))
+  let filteredGroups = term
+    ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.fefo.lot_number.toLowerCase().includes(term) || g.device.toLowerCase().includes(term))
     : groups;
+  if (deviceFilter !== "all") filteredGroups = filteredGroups.filter((g) => g.device === deviceFilter);
+  if (statusFilter === "critical") filteredGroups = filteredGroups.filter((g) => g.status === "red");
+  else if (statusFilter === "low") filteredGroups = filteredGroups.filter((g) => g.lowStock);
+  else if (statusFilter === "expiring") filteredGroups = filteredGroups.filter((g) => g.expiringSoon);
+  else if (statusFilter === "stable") filteredGroups = filteredGroups.filter((g) => g.status === "green");
+
   const deptCounts = departments.map((d) => ({ dept: d, n: filteredGroups.filter((g) => g.department === d).length })).filter((x) => x.n > 0);
   const visibleDepts = activeDept === "all" ? deptCounts.map((x) => x.dept) : [activeDept];
   const byDept = visibleDepts.map((d) => ({ dept: d, items: filteredGroups.filter((g) => g.department === d) })).filter((x) => x.items.length);
 
+  const noFilters = !term && deviceFilter === "all" && statusFilter === "all" && activeDept === "all";
+
   return (
     <div>
-      <input
-        placeholder="Search reagent, lot number, or device…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{ width: "100%", border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 16, marginBottom: 18, boxSizing: "border-box" }}
-      />
+      <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+        <input
+          placeholder="Search reagent, lot number, or device…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: 2, minWidth: 200, border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 16, boxSizing: "border-box" }}
+        />
+        <select
+          value={deviceFilter}
+          onChange={(e) => setDeviceFilter(e.target.value)}
+          style={{ flex: 1, minWidth: 160, border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: "#fff" }}
+        >
+          <option value="all">All devices</option>
+          {allDevices.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-        <StatCard status="red" count={counts.red} label="Critical — expired or out" />
-        <StatCard status="yellow" count={counts.yellow} label="Watch — expiring or low" />
-        <StatCard status="green" count={counts.green} label="Stable" />
+        <StatCard status="red" count={counts.red} label="Critical — expired or out" active={statusFilter === "critical"} onClick={() => setStatusFilter(statusFilter === "critical" ? "all" : "critical")} />
+        <StatCard status="low" count={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
+        <StatCard status="expiring" count={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
+        <StatCard status="green" count={counts.green} label="Stable" active={statusFilter === "stable"} onClick={() => setStatusFilter(statusFilter === "stable" ? "all" : "stable")} />
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 22, overflowX: "auto", paddingBottom: 2 }}>
@@ -473,7 +528,9 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
       </div>
 
       {byDept.length === 0 && (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: "#8A9694", fontSize: 13.5 }}>No matches for "{search}".</div>
+        <div style={{ textAlign: "center", padding: "40px 20px", color: "#8A9694", fontSize: 13.5 }}>
+          No matches{noFilters ? "" : " for this filter"}.
+        </div>
       )}
       {byDept.map(({ dept, items }) => (
         <div key={dept} style={{ marginBottom: 26 }}>
@@ -496,6 +553,12 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
                       {g.name}
                       {g.device && (
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "#0F7173", background: "#E4F4F1", borderRadius: 5, padding: "2px 6px" }}>{g.device}</span>
+                      )}
+                      {g.lowStock && (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#B8860B", background: "#FBF3DF", borderRadius: 5, padding: "2px 6px" }}>Low stock</span>
+                      )}
+                      {g.expiringSoon && (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", borderRadius: 5, padding: "2px 6px" }}>Expiring soon</span>
                       )}
                       {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
                     </div>
