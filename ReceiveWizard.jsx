@@ -89,6 +89,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
                 <option value="Reagent">Reagent</option>
                 <option value="QC">QC</option>
                 <option value="Cal">Cal</option>
+                <option value="Other">Other</option>
               </select>
             </label>
             <label style={labelStyle}>Received by

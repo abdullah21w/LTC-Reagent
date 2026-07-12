@@ -972,6 +972,7 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
             <option value="Reagent">Reagent</option>
             <option value="QC">QC</option>
             <option value="Cal">Cal</option>
+            <option value="Other">Other</option>
           </select>
         </label>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
