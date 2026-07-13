@@ -923,10 +923,14 @@ function firstOfMonth() {
 }
 
 function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog }) {
+  const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
   const [searchLot, setSearchLot] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
+
+  const reagentById = {};
+  reagents.forEach((r) => { reagentById[r.id] = r; });
 
   const matchedLots = useMemo(() => {
     const term = searchLot.trim().toLowerCase();
@@ -936,8 +940,22 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
       .sort((a, b) => new Date(b.date_added) - new Date(a.date_added));
   }, [reagents, searchLot, dateFrom, dateTo, deptFilter]);
 
+  const matchedLogs = useMemo(() => {
+    const term = searchLot.trim().toLowerCase();
+    return logs
+      .filter((l) => {
+        const r = reagentById[l.reagent_id];
+        if (term) {
+          return (r && r.lot_number.toLowerCase().includes(term)) || (r && r.name.toLowerCase().includes(term)) || l.used_by.toLowerCase().includes(term);
+        }
+        return l.date >= dateFrom && l.date <= dateTo;
+      })
+      .filter((l) => (deptFilter ? reagentById[l.reagent_id]?.department === deptFilter : true))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [logs, reagents, searchLot, dateFrom, dateTo, deptFilter]);
+
   function logsFor(reagentId) {
-    return logs.filter((l) => l.reagent_id === reagentId).sort((a, b) => new Date(b.date) - new Date(a.date));
+    return logs.filter((l) => l.reagent_id === reagentId);
   }
 
   async function exportExcel() {
@@ -986,6 +1004,21 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
         <button onClick={exportExcel} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "8px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Download size={14} /> Export Excel</button>
       </div>
 
+      <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+        <button
+          onClick={() => setViewTab("receive")}
+          style={{ background: viewTab === "receive" ? "#0F7173" : "#fff", color: viewTab === "receive" ? "#fff" : "#516361", border: "1px solid #E1E8E5", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}
+        >
+          Receive ({matchedLots.length})
+        </button>
+        <button
+          onClick={() => setViewTab("logs")}
+          style={{ background: viewTab === "logs" ? "#0F7173" : "#fff", color: viewTab === "logs" ? "#fff" : "#516361", border: "1px solid #E1E8E5", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}
+        >
+          Log use ({matchedLogs.length})
+        </button>
+      </div>
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12, color: "#7B8E8A" }}>From</span>
@@ -994,7 +1027,7 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ border: "1px solid #C7D1CE", borderRadius: 6, padding: "7px 10px", fontSize: 13 }} />
         </div>
         <input
-          placeholder="Search by lot number…"
+          placeholder={viewTab === "receive" ? "Search by lot number…" : "Search by lot number, reagent, or used by…"}
           value={searchLot}
           onChange={(e) => setSearchLot(e.target.value)}
           style={{ border: "1px solid #C7D1CE", borderRadius: 6, padding: "7px 10px", fontSize: 13, flex: 1, minWidth: 180 }}
@@ -1004,74 +1037,103 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
           {departments.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
       </div>
-      {searchLot.trim() && <div style={{ fontSize: 12, color: "#8A9694", marginBottom: 10 }}>Searching by lot number — date filter is ignored while searching.</div>}
+      {searchLot.trim() && <div style={{ fontSize: 12, color: "#8A9694", marginBottom: 10 }}>Searching — date filter is ignored while searching.</div>}
 
-      {matchedLots.length === 0 && (
-        <div style={{ textAlign: "center", padding: "60px 20px", color: "#8A9694", fontSize: 13.5 }}>No records match this filter.</div>
+      {viewTab === "receive" && (
+        <>
+          {matchedLots.length === 0 && (
+            <div style={{ textAlign: "center", padding: "60px 20px", color: "#8A9694", fontSize: 13.5 }}>No records match this filter.</div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {matchedLots.map((r) => {
+              const rLogCount = logsFor(r.id).length;
+              const failedItems = Object.keys(INSPECTION_REPORT_LABELS).filter((k) => r[k] === false);
+              return (
+                <div key={r.id} style={{ background: "#fff", border: r.deleted ? "1px solid #C1432B55" : "1px solid #E1E8E5", borderRadius: 10, padding: 16, opacity: r.deleted ? 0.75 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                      {r.name}
+                      {r.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>}
+                      {r.deleted && role === "owner" && (
+                        <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · {r.item_type} · Lot {r.lot_number}</div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
+                    <div><div style={{ color: "#2F6B4F", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Received by</div>{r.added_by}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Received date</div>{r.date_added}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Expiry date</div>{r.expiry_date}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Quantity</div>{r.current_quantity}/{r.quantity_received} {r.unit}</div>
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                    {Object.entries(INSPECTION_REPORT_LABELS).map(([key, label]) => (
+                      <span key={key} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, background: r[key] ? "#E8F2EC" : "#FBEAE6", color: r[key] ? "#2F6B4F" : "#C1432B", fontWeight: 600 }}>
+                        {r[key] ? "✓" : "✕"} {label}
+                      </span>
+                    ))}
+                  </div>
+                  {failedItems.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: "#8A2E1F", marginBottom: 10 }}>⚠ Inspection issue on receipt</div>
+                  )}
+                  {(r.receiving_notes || r.inspection_notes) && (
+                    <div style={{ fontSize: 12, color: "#516361", marginBottom: 12, background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px" }}>
+                      {r.receiving_notes && <div><b>Receiving note:</b> {r.receiving_notes}</div>}
+                      {r.inspection_notes && <div><b>Inspection note:</b> {r.inspection_notes}</div>}
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: 12, color: "#7B8E8A" }}>
+                    {rLogCount === 0 ? "No usage recorded yet." : `${rLogCount} usage ${rLogCount === 1 ? "entry" : "entries"} — see the "Log use" tab above.`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {matchedLots.map((r) => {
-          const rLogs = logsFor(r.id);
-          const failedItems = Object.keys(INSPECTION_REPORT_LABELS).filter((k) => r[k] === false);
-          return (
-            <div key={r.id} style={{ background: "#fff", border: r.deleted ? "1px solid #C1432B55" : "1px solid #E1E8E5", borderRadius: 10, padding: 16, opacity: r.deleted ? 0.75 : 1 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
-                  {r.name}
-                  {r.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>}
-                  {r.deleted && role === "owner" && (
-                    <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+      {viewTab === "logs" && (
+        <>
+          {matchedLogs.length === 0 && (
+            <div style={{ textAlign: "center", padding: "60px 20px", color: "#8A9694", fontSize: 13.5 }}>No records match this filter.</div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {matchedLogs.map((l) => {
+              const r = reagentById[l.reagent_id];
+              return (
+                <div key={l.id} style={{ background: "#fff", border: l.deleted ? "1px solid #C1432B55" : "1px solid #E1E8E5", borderRadius: 10, padding: 16, opacity: l.deleted ? 0.75 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                      {r ? r.name : "Unknown reagent"}
+                      {l.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {l.deleted_by} · {fmtDateTime(l.deleted_at)}</span>}
+                      {l.deleted && role === "owner" && (
+                        <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r ? `${r.department} · Lot ${r.lot_number}${r.device ? ` · ${r.device}` : ""}` : ""}</div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
+                    <div><div style={{ color: "#1D4ED8", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Used by</div>{l.used_by}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{l.date}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Amount used</div>{l.amount} {r ? r.unit : ""}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Tested by QC</div>{l.tested_by_qc ? "Yes" : "No"}</div>
+                  </div>
+
+                  {l.note && (
+                    <div style={{ fontSize: 12, color: "#516361", background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px" }}>
+                      <b>Note:</b> {l.note}
+                    </div>
                   )}
                 </div>
-                <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · {r.item_type} · Lot {r.lot_number}</div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
-                <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Received by</div>{r.added_by}</div>
-                <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Received date</div>{r.date_added}</div>
-                <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Expiry date</div>{r.expiry_date}</div>
-                <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Quantity</div>{r.current_quantity}/{r.quantity_received} {r.unit}</div>
-              </div>
-
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-                {Object.entries(INSPECTION_REPORT_LABELS).map(([key, label]) => (
-                  <span key={key} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, background: r[key] ? "#E8F2EC" : "#FBEAE6", color: r[key] ? "#2F6B4F" : "#C1432B", fontWeight: 600 }}>
-                    {r[key] ? "✓" : "✕"} {label}
-                  </span>
-                ))}
-              </div>
-              {failedItems.length > 0 && (
-                <div style={{ fontSize: 11.5, color: "#8A2E1F", marginBottom: 10 }}>⚠ Inspection issue on receipt</div>
-              )}
-              {(r.receiving_notes || r.inspection_notes) && (
-                <div style={{ fontSize: 12, color: "#516361", marginBottom: 12, background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px" }}>
-                  {r.receiving_notes && <div><b>Receiving note:</b> {r.receiving_notes}</div>}
-                  {r.inspection_notes && <div><b>Inspection note:</b> {r.inspection_notes}</div>}
-                </div>
-              )}
-
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#7B8E8A", marginBottom: 6, letterSpacing: 0.3 }}>USAGE LOG</div>
-              {rLogs.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: "#8A9694" }}>No usage recorded yet.</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {rLogs.map((l) => (
-                    <div key={l.id} style={{ display: "flex", gap: 12, fontSize: 12.5, padding: "6px 0", borderTop: "1px solid #EEF2F0", opacity: l.deleted ? 0.6 : 1 }}>
-                      <div style={{ width: 88, color: "#8A9694", fontFamily: "'IBM Plex Mono', monospace" }}>{l.date}</div>
-                      <div style={{ flex: 1 }}>−{l.amount} {r.unit} by <b>{l.used_by}</b> {l.deleted && <span style={{ color: "#C1432B", fontWeight: 700 }}>(deleted by {l.deleted_by} · {fmtDateTime(l.deleted_at)})</span>}</div>
-                      {l.deleted && role === "owner" && (
-                        <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "2px 8px", fontSize: 10.5, fontWeight: 700 }}>Erase</button>
-                      )}
-                      <div style={{ color: l.tested_by_qc ? "#2F6B4F" : "#8A9694", fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
