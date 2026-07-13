@@ -57,6 +57,10 @@ create table if not exists app_config (
   expiry_warning_days int not null default 30,
   alert_email text not null default '',
   expiry_alert_days jsonb not null default '[3, 1]'::jsonb,
+  backup_enabled boolean not null default false,
+  backup_email text not null default '',
+  backup_frequency_days int not null default 7,
+  backup_last_sent date,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import Settings from "./Settings";
@@ -19,16 +19,17 @@ const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000)
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString() : "");
 
 const THEME = {
-  primary: "#0F7173",
-  primaryLight: "#5FBFB0",
-  sidebarBg: "#1B2B2E",
-  sidebarText: "#8FA39E",
-  sidebarTextActive: "#F0F3F2",
-  bg: "#F0F3F2",
-  cardBorder: "#E1E8E5",
-  cardShadow: "0 8px 24px rgba(0,0,0,0.06)",
-  text: "#1B2B2E",
-  textMuted: "#7B8E8A",
+  primary: "var(--primary)",
+  primaryLight: "var(--primary-light)",
+  sidebarBg: "var(--sidebar-bg)",
+  sidebarText: "var(--sidebar-text)",
+  sidebarTextActive: "var(--sidebar-text-active)",
+  bg: "var(--bg)",
+  cardBg: "var(--card-bg)",
+  cardBorder: "var(--card-border)",
+  cardShadow: "var(--card-shadow)",
+  text: "var(--text)",
+  textMuted: "var(--text-muted)",
 };
 
 function statusOf(item, warnDays = 30) {
@@ -86,6 +87,13 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("reagent_dark") === "1");
+  function toggleDarkMode() {
+    setDarkMode((d) => {
+      localStorage.setItem("reagent_dark", !d ? "1" : "0");
+      return !d;
+    });
+  }
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [editReagent, setEditReagent] = useState(null);
   const [editLog, setEditLog] = useState(null);
@@ -343,6 +351,8 @@ export default function App() {
       if (!map[key]) map[key] = [];
       map[key].push(r);
     }
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
     return Object.entries(map).map(([key, items]) => {
       const sorted = [...items].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
@@ -352,9 +362,15 @@ export default function App() {
       const lowStock = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
       const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
       const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
-      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, expiringSoon };
+
+      const itemIds = new Set(items.map((i) => i.id));
+      const recentUsed = (logs || []).filter((l) => !l.deleted && itemIds.has(l.reagent_id) && new Date(l.date) >= cutoff).reduce((s, l) => s + Number(l.amount || 0), 0);
+      const dailyRate = recentUsed / 30;
+      const predictedDaysLeft = dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
+
+      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, expiringSoon, dailyRate, predictedDaysLeft };
     });
-  }, [reagents, warnDays]);
+  }, [reagents, warnDays, logs]);
 
   const counts = useMemo(() => {
     const c = { red: 0, yellow: 0, green: 0, flagged: 0, lowStock: 0, expiringSoon: 0 };
@@ -391,9 +407,35 @@ export default function App() {
   if (!role) return <Login config={config} staffAccounts={staffAccounts} onLogin={handleLogin} />;
 
   return (
-    <div style={{ minHeight: "100vh", background: THEME.bg, fontFamily: "'Inter', sans-serif", color: THEME.text, display: "flex" }}>
+    <div style={{ minHeight: "100vh", background: THEME.bg, fontFamily: "'Inter', sans-serif", color: THEME.text, display: "flex" }} data-theme={darkMode ? "dark" : "light"}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+        :root {
+          --primary: #0F7173;
+          --primary-light: #5FBFB0;
+          --sidebar-bg: #1B2B2E;
+          --sidebar-text: #8FA39E;
+          --sidebar-text-active: #F0F3F2;
+          --bg: #F0F3F2;
+          --card-bg: #ffffff;
+          --card-border: #E1E8E5;
+          --card-shadow: 0 8px 24px rgba(0,0,0,0.06);
+          --text: #1B2B2E;
+          --text-muted: #7B8E8A;
+        }
+        [data-theme="dark"] {
+          --primary: #5FBFB0;
+          --primary-light: #7DD3C0;
+          --sidebar-bg: #0C1416;
+          --sidebar-text: #6E827D;
+          --sidebar-text-active: #EDF2F1;
+          --bg: #10191B;
+          --card-bg: #1A2426;
+          --card-border: #2B3A3C;
+          --card-shadow: 0 8px 24px rgba(0,0,0,0.4);
+          --text: #E7EEEC;
+          --text-muted: #8CA09B;
+        }
         * { box-sizing: border-box; }
         button { font-family: inherit; cursor: pointer; }
         input, select { font-family: inherit; }
@@ -419,6 +461,7 @@ export default function App() {
         onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)}
         onLogout={logout} onChangePassword={() => setShowChangePassword(true)}
         username={username} open={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)}
+        darkMode={darkMode} onToggleDarkMode={toggleDarkMode}
       />
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -477,7 +520,7 @@ export default function App() {
   );
 }
 
-function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassword, username, open, onCloseMobile }) {
+function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassword, username, open, onCloseMobile, darkMode, onToggleDarkMode }) {
   const go = (t) => { setTab(t); onCloseMobile(); };
   const initial = (username || "?").charAt(0).toUpperCase();
   return (
@@ -519,6 +562,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
           <div style={{ fontSize: 13, fontWeight: 600, color: THEME.sidebarTextActive, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
           <div style={{ fontSize: 11, color: THEME.sidebarText }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
         </div>
+        <button onClick={onToggleDarkMode} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}>{darkMode ? <Sun size={15} /> : <Moon size={15} />}</button>
         <button onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><KeyRound size={15} /></button>
         <button onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><LogOut size={15} /></button>
       </div>
@@ -553,7 +597,7 @@ function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
   const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const initial = (username || "?").charAt(0).toUpperCase();
   return (
-    <div style={{ background: "#fff", borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
+    <div style={{ background: THEME.cardBg, borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
       <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
           <button className="sidebar-mobile-toggle" onClick={onMenuClick} style={{ display: "none", background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text, flexShrink: 0 }}>
@@ -565,7 +609,7 @@ function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-          <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: "#fff", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: 9, color: "#475569" }}><Bell size={16} /></button>
+          <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: 9, color: THEME.textMuted }}><Bell size={16} /></button>
           <div className="topbar-date" style={{ fontSize: 13, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{today}</div>
           <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#E4F4F1", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5 }}>{initial}</div>
         </div>
@@ -580,7 +624,7 @@ function StatCardV2({ icon, iconBg, iconColor, value, label, active, onClick }) 
       onClick={onClick}
       className="hover-lift"
       style={{
-        background: "#fff",
+        background: THEME.cardBg,
         border: `1px solid ${active ? iconColor : THEME.cardBorder}`,
         borderRadius: 16,
         boxShadow: active ? `0 0 0 2px ${iconColor}33` : THEME.cardShadow,
@@ -602,7 +646,7 @@ function StatCardV2({ icon, iconBg, iconColor, value, label, active, onClick }) 
 
 function Panel({ title, action, children }) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: 20, flex: 1, minWidth: 300 }}>
+    <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: 20, flex: 1, minWidth: 300 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>{title}</div>
         {action}
@@ -614,9 +658,9 @@ function Panel({ title, action, children }) {
 
 function GaugeBar({ pct, color }) {
   return (
-    <div style={{ width: 44, height: 64, border: "1.5px solid #C7D1CE", borderRadius: 5, position: "relative", overflow: "hidden", background: "#fff", flexShrink: 0 }}>
+    <div style={{ width: 44, height: 64, border: `1.5px solid ${THEME.cardBorder}`, borderRadius: 5, position: "relative", overflow: "hidden", background: THEME.cardBg, flexShrink: 0 }}>
       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${Math.min(100, Math.max(3, pct))}%`, background: color, transition: "height .3s" }} />
-      <div style={{ position: "absolute", top: 4, left: 0, right: 0, textAlign: "center", fontSize: 9, color: "#8A9694", fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(pct)}%</div>
+      <div style={{ position: "absolute", top: 4, left: 0, right: 0, textAlign: "center", fontSize: 9, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(pct)}%</div>
     </div>
   );
 }
@@ -629,9 +673,9 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
 
   if (groups.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "80px 20px", color: "#7B8E8A" }}>
+      <div style={{ textAlign: "center", padding: "80px 20px", color: THEME.textMuted }}>
         <Droplet size={36} style={{ marginBottom: 12, opacity: 0.5 }} />
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, color: "#1B2B2E" }}>No reagents logged yet</div>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, color: THEME.text }}>No reagents logged yet</div>
         <div style={{ fontSize: 14 }}>Use "Receive stock" above to add your first reagent batch.</div>
       </div>
     );
@@ -644,6 +688,23 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
   const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   const reagentById = {};
   groups.forEach((g) => g.items.forEach((i) => { reagentById[i.id] = { name: g.name, device: g.device, unit: g.unit }; }));
+
+  const predictedList = groups
+    .filter((g) => g.predictedDaysLeft !== null && g.predictedDaysLeft <= 14)
+    .sort((a, b) => a.predictedDaysLeft - b.predictedDaysLeft)
+    .slice(0, 5);
+
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const mostUsedMap = {};
+  (logs || []).forEach((l) => {
+    if (l.deleted || new Date(l.date) < monthStart) return;
+    const r = reagentById[l.reagent_id];
+    if (!r) return;
+    mostUsedMap[r.name] = (mostUsedMap[r.name] || 0) + Number(l.amount || 0);
+  });
+  const mostUsedList = Object.entries(mostUsedMap).map(([name, qty]) => ({ name, qty, unit: groups.find((g) => g.name === name)?.unit || "" })).sort((a, b) => b.qty - a.qty).slice(0, 5);
 
   const term = search.trim().toLowerCase();
   let filteredGroups = term
@@ -760,6 +821,36 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
         </Panel>
       </div>
 
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+        <Panel title="Predicted to run low" action={<span style={{ fontSize: 12, color: THEME.textMuted }}>Based on 30-day usage</span>}>
+          {predictedList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing predicted to run low in the next 2 weeks, based on recent usage.</div>}
+          {predictedList.map((g) => (
+            <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                <div style={{ fontSize: 11.5, color: THEME.textMuted }}>~{g.dailyRate.toFixed(1)} {g.unit}/day · {g.totalQty} {g.unit} left</div>
+              </div>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: g.predictedDaysLeft <= 3 ? "#DC2626" : "#EA580C", background: g.predictedDaysLeft <= 3 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
+                ~{g.predictedDaysLeft}d left
+              </span>
+            </div>
+          ))}
+        </Panel>
+
+        <Panel title="Most used this month">
+          {mostUsedList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet this month.</div>}
+          {mostUsedList.map((m, i) => (
+            <div key={m.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: THEME.textMuted, width: 16, flexShrink: 0 }}>#{i + 1}</span>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+              </div>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: THEME.primary, flexShrink: 0 }}>{m.qty} {m.unit}</span>
+            </div>
+          ))}
+        </Panel>
+      </div>
+
       <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "28px 0 14px" }}>All reagents</div>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
@@ -772,7 +863,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
         <select
           value={deviceFilter}
           onChange={(e) => setDeviceFilter(e.target.value)}
-          style={{ flex: 1, minWidth: 160, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: "#fff" }}
+          style={{ flex: 1, minWidth: 160, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: THEME.cardBg, color: THEME.text }}
         >
           <option value="all">All devices</option>
           {allDevices.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -787,7 +878,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
       </div>
 
       {byDept.length === 0 && (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: "#8A9694", fontSize: 13.5 }}>
+        <div style={{ textAlign: "center", padding: "40px 20px", color: THEME.textMuted, fontSize: 13.5 }}>
           No matches{noFilters ? "" : " for this filter"}.
         </div>
       )}
@@ -805,7 +896,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
               const pct = g.totalReceived > 0 ? (g.totalQty / g.totalReceived) * 100 : 0;
               const dExp = daysBetween(g.fefo.expiry_date, todayISO());
               return (
-                <div key={g.key} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: "#fff", border: "1px solid #E1E8E5", borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
+                <div key={g.key} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
                   <GaugeBar pct={pct} color={m.color} />
                   <div style={{ flex: 1, minWidth: 140 }}>
                     <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -821,13 +912,13 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                       )}
                       {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
                     </div>
-                    <div style={{ fontSize: 12.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
+                    <div style={{ fontSize: 12.5, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
                       {g.totalQty} {g.unit} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
-                    <div style={{ fontSize: 11.5, color: "#8A9694" }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
+                    <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
                   </div>
                   {can("delete") && (
                     <button
@@ -855,9 +946,9 @@ function DeptPill({ active, onClick, label, color }) {
       onClick={onClick}
       style={{
         flexShrink: 0,
-        background: active ? color : "#fff",
-        color: active ? "#fff" : "#3A4A48",
-        border: `1px solid ${active ? color : "#D6DEDB"}`,
+        background: active ? color : THEME.cardBg,
+        color: active ? "#fff" : THEME.text,
+        border: `1px solid ${active ? color : THEME.cardBorder}`,
         borderRadius: 20,
         padding: "7px 14px",
         fontSize: 12.5,
@@ -940,7 +1031,12 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
     <div>
       <button onClick={onBack} style={{ background: "none", border: "none", color: "#0F7173", fontSize: 13, fontWeight: 600, marginBottom: 18, display: "flex", alignItems: "center", gap: 4 }}>← Back to dashboard</button>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{group.name}</h2>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20, fontFamily: "'IBM Plex Mono', monospace" }}>{group.department}{group.device ? ` · ${group.device}` : ""} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)</div>
+      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20, fontFamily: "'IBM Plex Mono', monospace" }}>
+        {group.department}{group.device ? ` · ${group.device}` : ""} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)
+        {group.predictedDaysLeft !== null && group.predictedDaysLeft !== undefined && (
+          <> · <span style={{ color: group.predictedDaysLeft <= 3 ? "#C1432B" : group.predictedDaysLeft <= 14 ? "#B8860B" : "#7B8E8A", fontWeight: 700 }}>~{group.predictedDaysLeft}d left at current usage rate</span></>
+        )}
+      </div>
 
       <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
         <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>

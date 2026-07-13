@@ -76,6 +76,9 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     low_stock_default_percent: config.low_stock_default_percent,
     expiry_warning_days: config.expiry_warning_days ?? 30,
     alert_email: config.alert_email || "",
+    backup_enabled: config.backup_enabled || false,
+    backup_email: config.backup_email || "",
+    backup_frequency_days: config.backup_frequency_days || 7,
   });
   const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
   const [newAlertDay, setNewAlertDay] = useState("");
@@ -371,6 +374,28 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             </div>
             <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save alert settings
+            </button>
+            {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3, marginTop: 30 }}>AUTOMATIC BACKUPS</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            Off by default. Turn this on and every N days a full JSON export of all your data (reagents, logs, users, devices) is emailed to you automatically as an attachment.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+              <input type="checkbox" checked={creds.backup_enabled} onChange={(e) => setCreds((c) => ({ ...c, backup_enabled: e.target.checked }))} />
+              Enable automatic backups
+            </label>
+            <label style={labelStyle}>Send backup to
+              <input type="email" style={inputStyle} placeholder="you@example.com" value={creds.backup_email} onChange={(e) => setCreds((c) => ({ ...c, backup_email: e.target.value }))} />
+            </label>
+            <label style={labelStyle}>Every how many days
+              <input type="number" min="1" style={inputStyle} value={creds.backup_frequency_days} onChange={(e) => setCreds((c) => ({ ...c, backup_frequency_days: Number(e.target.value) }))} />
+            </label>
+            {config.backup_last_sent && <div style={{ fontSize: 11.5, color: "#8A9694" }}>Last backup sent: {config.backup_last_sent}</div>}
+            <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Save size={14} /> Save backup settings
             </button>
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>
