@@ -44,6 +44,11 @@ function isExpiringSoonItem(item, warnDays) {
   return dExp >= 0 && dExp <= warnDays;
 }
 
+const LOT_TO_LOT_DEVICES = ["vitros"];
+function needsLotToLot(deviceName) {
+  return !!deviceName && LOT_TO_LOT_DEVICES.includes(deviceName.trim().toLowerCase());
+}
+
 function hasInspectionIssue(item) {
   return INSPECTION_KEYS.some((k) => item[k] === false);
 }
@@ -74,6 +79,8 @@ export default function App() {
   const [staffAccounts, setStaffAccounts] = useState([]);
   const [devices, setDevices] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
+  const [lotToLotPending, setLotToLotPending] = useState([]);
+  const [lotToLotNotice, setLotToLotNotice] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [showWizard, setShowWizard] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -102,6 +109,7 @@ export default function App() {
     const { data: s } = await supabase.from("staff_accounts").select("*").order("username");
     const { data: a } = await supabase.from("audit_log").select("*").order("performed_at", { ascending: false });
     const { data: dv } = await supabase.from("devices").select("*").order("name");
+    const { data: ltl } = await supabase.from("lot_to_lot_pending").select("*");
     if (e1 || e2) {
       setError("Could not connect to the database. Check Supabase settings.");
       setReagents([]);
@@ -114,6 +122,7 @@ export default function App() {
     setStaffAccounts(s || []);
     setActivityLog(a || []);
     setDevices(dv || []);
+    setLotToLotPending(ltl || []);
   }
 
   async function logActivity(action, entity, description) {
@@ -215,6 +224,26 @@ export default function App() {
         await supabase.from("reagents").update({ active_on_device: true }).eq("id", item.id);
       }
     }
+
+    if (needsLotToLot(item.device)) {
+      // Step 2: mark today's Lot-to-Lot check as done, if this submission was confirming one.
+      if (entry.confirmLotToLotId) {
+        await supabase.from("lot_to_lot_pending").update({ confirmed: true, confirmed_by: username, confirmed_at: new Date().toISOString() }).eq("id", entry.confirmLotToLotId);
+      }
+      // Step 1: this lot just ran out — if another lot of the same reagent is
+      // waiting on this device, flag that the next use needs Lot-to-Lot verification.
+      if (newQty <= 0) {
+        const otherLotAvailable = reagents.some((r) => r.id !== item.id && r.name === item.name && r.device === item.device && !r.deleted && r.current_quantity > 0);
+        if (otherLotAvailable) {
+          await supabase.from("lot_to_lot_pending").upsert(
+            { reagent_name: item.name, device: item.device, depleted_lot_number: item.lot_number, confirmed: false, confirmed_by: null, confirmed_at: null, created_at: new Date().toISOString() },
+            { onConflict: "reagent_name,device" }
+          );
+          setLotToLotNotice(`Lot ${item.lot_number} of ${item.name} just ran out on ${item.device}. A Lot-to-Lot verification will be required before the next lot is used.`);
+        }
+      }
+    }
+
     setShowLog(false);
     loadAll();
   }
@@ -409,6 +438,13 @@ export default function App() {
               <div style={{ flex: 1, fontSize: 13.5, color: "#78350F" }}><b>{counts.flagged}</b> reagent{counts.flagged > 1 ? "s" : ""} failed an inspection check on receipt — review before use.</div>
             </div>
           )}
+          {lotToLotNotice && (
+            <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+              <AlertTriangle size={18} color="#4F46E5" />
+              <div style={{ flex: 1, fontSize: 13.5, color: "#3730A3" }}>{lotToLotNotice}</div>
+              <button onClick={() => setLotToLotNotice(null)} style={{ background: "none", border: "none", color: "#3730A3" }}><X size={16} /></button>
+            </div>
+          )}
 
           {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
@@ -432,7 +468,7 @@ export default function App() {
       </div>
 
       {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
-      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
+      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
@@ -1255,7 +1291,7 @@ function Modal({ title, onClose, children }) {
 const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
-function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
+function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onSubmit }) {
   const [typeFilter, setTypeFilter] = useState("");
   const filteredReagents = typeFilter ? reagents.filter((r) => r.item_type === typeFilter) : reagents;
   const names = [...new Set(filteredReagents.map((r) => r.name))];
@@ -1274,6 +1310,10 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
   const currentActiveLot = device ? reagents.find((r) => r.name === name && r.device === device && r.active_on_device) : null;
   const showReplaceChoice = !!(device && fefo && currentActiveLot && currentActiveLot.id !== fefo.id);
   const [replaceOnDevice, setReplaceOnDevice] = useState(true);
+
+  const pendingLtl = needsLotToLot(device) ? (lotToLotPending || []).find((p) => p.reagent_name === name && p.device === device && !p.confirmed) : null;
+  const [ltlConfirmed, setLtlConfirmed] = useState(false);
+  useEffect(() => { setLtlConfirmed(false); }, [pendingLtl?.id]);
 
   function changeType(t) {
     setTypeFilter(t);
@@ -1299,7 +1339,8 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
 
   function submit() {
     if (!fefo || !amount || !usedBy) return;
-    onSubmit({ reagentId: fefo.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true });
+    if (pendingLtl && !ltlConfirmed) return;
+    onSubmit({ reagentId: fefo.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
   }
 
   if (reagents.length === 0) {
@@ -1350,6 +1391,17 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
             {!replaceOnDevice && <div style={{ fontSize: 11.5, color: "#7C3E00", marginTop: 6 }}>Both lots will show as active on this device — use this only if the device genuinely holds two lots at once.</div>}
           </div>
         )}
+        {pendingLtl && (
+          <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 7, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12.5, color: "#3730A3", marginBottom: 8 }}>
+              Lot <b>{pendingLtl.depleted_lot_number}</b> ran out on <b>{device}</b>. Lot-to-Lot verification is required before using the next lot.
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#3730A3", cursor: "pointer" }}>
+              <input type="checkbox" checked={ltlConfirmed} onChange={(e) => setLtlConfirmed(e.target.checked)} />
+              I confirm Lot-to-Lot verification was performed for this lot
+            </label>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10 }}>
           <label style={{ ...labelStyle, flex: 1 }}>Amount used ({fefo?.unit || "unit"})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
@@ -1359,7 +1411,7 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
         </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
-        <button onClick={submit} disabled={!fefo} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: fefo ? 1 : 0.5 }}>Save log</button>
+        <button onClick={submit} disabled={!fefo || (pendingLtl && !ltlConfirmed)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!fefo || (pendingLtl && !ltlConfirmed)) ? 0.5 : 1 }}>Save log</button>
       </div>
       {showScanner && <BarcodeScanner onClose={() => setShowScanner(false)} onDetected={handleScan} />}
     </Modal>
