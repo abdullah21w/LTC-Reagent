@@ -6,7 +6,6 @@ import Settings from "./Settings";
 import BarcodeScanner from "./BarcodeScanner";
 import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -245,6 +244,12 @@ export default function App() {
     loadAll();
   }
 
+  async function removeFromDevice(id) {
+    if (!can("edit")) return;
+    await supabase.from("reagents").update({ active_on_device: false }).eq("id", id);
+    loadAll();
+  }
+
   async function saveEditedLog(updated, original) {
     if (!can("edit")) return;
     const item = reagents.find((r) => r.id === original.reagent_id);
@@ -405,7 +410,7 @@ export default function App() {
             </div>
           )}
 
-          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
+          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
             <DetailView
               group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
@@ -419,7 +424,7 @@ export default function App() {
             />
           )}
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
-          {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} />}
+          {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onRemove={removeFromDevice} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -580,7 +585,7 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onSelect }) {
+function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onSelect, onViewDevices }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
   const [deviceFilter, setDeviceFilter] = useState("all");
@@ -603,19 +608,6 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
   const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   const reagentById = {};
   groups.forEach((g) => g.items.forEach((i) => { reagentById[i.id] = { name: g.name, device: g.device, unit: g.unit }; }));
-
-  const chartData = (() => {
-    const days = [];
-    const today = new Date();
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
-    }
-    const byDay = {};
-    (logs || []).forEach((l) => { if (!l.deleted) byDay[l.date] = (byDay[l.date] || 0) + Number(l.amount || 0); });
-    return days.map((d) => ({ date: d.slice(5), qty: byDay[d] || 0 }));
-  })();
 
   const term = search.trim().toLowerCase();
   let filteredGroups = term
@@ -661,22 +653,26 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
           })}
         </Panel>
 
-        <Panel title="Usage analytics" action={<span style={{ fontSize: 12, color: THEME.textMuted }}>Last 30 days</span>}>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="usageFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={THEME.primary} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={THEME.primary} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke={THEME.cardBorder} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 10.5, fill: THEME.textMuted }} interval={4} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10.5, fill: THEME.textMuted }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, border: `1px solid ${THEME.cardBorder}` }} />
-              <Area type="monotone" dataKey="qty" stroke={THEME.primary} strokeWidth={2} fill="url(#usageFill)" name="Used" />
-            </AreaChart>
-          </ResponsiveContainer>
+        <Panel title="Devices" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={onViewDevices}>View all</span>}>
+          {(devices || []).length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No devices added yet.</div>}
+          {(devices || []).slice(0, 5).map((d) => {
+            const activeLot = groups.flatMap((g) => g.items).find((i) => i.device === d.name && i.active_on_device);
+            const m = activeLot ? STATUS_META[statusOf(activeLot, 30)] : null;
+            const dExp = activeLot ? daysBetween(activeLot.expiry_date, todayISO()) : null;
+            return (
+              <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
+                  <div style={{ fontSize: 11.5, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeLot ? `${activeLot.name} · Lot ${activeLot.lot_number}` : "No active lot"}</div>
+                </div>
+                {activeLot && (
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
+                    {dExp < 0 ? "Expired" : `${dExp}d left`}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </Panel>
       </div>
 
@@ -838,7 +834,7 @@ function DeptPill({ active, onClick, label, color }) {
   );
 }
 
-function DevicesBoard({ reagents, devices, warnDays }) {
+function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRemove }) {
   const active = (reagents || []).filter((r) => !r.deleted);
 
   if (!devices || devices.length === 0) {
@@ -862,14 +858,23 @@ function DevicesBoard({ reagents, devices, warnDays }) {
                 const m = STATUS_META[statusOf(r, warnDays)];
                 const dExp = daysBetween(r.expiry_date, todayISO());
                 return (
-                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
-                    <div style={{ minWidth: 0 }}>
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: `1px solid ${THEME.cardBorder}`, flexWrap: "wrap" }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{r.name}</div>
                       <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {r.lot_number} · {r.current_quantity} {r.unit} left</div>
                     </div>
                     <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
                       {dExp < 0 ? "Expired" : `${dExp}d left`}
                     </span>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {can("edit") && (
+                        <button onClick={() => onRemove(r.id)} title="Remove from this device (keeps it in inventory)" style={{ background: "none", border: `1px solid ${THEME.cardBorder}`, color: THEME.textMuted, borderRadius: 6, padding: "4px 8px", fontSize: 11 }}>
+                          Remove from device
+                        </button>
+                      )}
+                      {can("edit") && <button onClick={() => onEdit(r)} title="Edit this lot" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><Pencil size={14} /></button>}
+                      {can("delete") && <button onClick={() => onDelete(r.id)} title="Delete this lot" style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}><Trash2 size={14} /></button>}
+                    </div>
                   </div>
                 );
               })
