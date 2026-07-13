@@ -14,6 +14,7 @@ create table if not exists reagents (
   date_added date not null default current_date,
   added_by text not null,
   low_stock_threshold numeric not null default 0,
+  active_on_device boolean not null default false,
   -- Receiving inspection checklist (yes/no)
   intact_container boolean not null default true,
   complete_compound boolean not null default true,

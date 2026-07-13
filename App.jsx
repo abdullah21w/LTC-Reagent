@@ -205,6 +205,17 @@ export default function App() {
     await supabase.from("consumption_logs").insert({
       reagent_id: entry.reagentId, amount: entry.amount, date: entry.date, used_by: entry.usedBy, note: entry.note, tested_by_qc: entry.testedByQC,
     });
+    if (item.device) {
+      if (entry.replaceOnDevice) {
+        const siblings = reagents.filter((r) => r.name === item.name && r.device === item.device && r.id !== item.id && !r.deleted && r.active_on_device);
+        for (const s of siblings) {
+          await supabase.from("reagents").update({ active_on_device: false }).eq("id", s.id);
+        }
+      }
+      if (!item.active_on_device) {
+        await supabase.from("reagents").update({ active_on_device: true }).eq("id", item.id);
+      }
+    }
     setShowLog(false);
     loadAll();
   }
@@ -408,6 +419,7 @@ export default function App() {
             />
           )}
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -444,6 +456,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
 
         <SideGroup label="Tracking" />
         {can("reports") && <SideItem active={tab === "reports"} onClick={() => go("reports")} icon={<FileText size={16} />} label="Reports" />}
+        {can("dashboard") && <SideItem active={tab === "devices"} onClick={() => go("devices")} icon={<Cpu size={16} />} label="Devices" />}
         {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
@@ -484,11 +497,12 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
   reports: "Full inventory and consumption history",
+  devices: "What's currently loaded on each device",
   settings: "Manage users, permissions, and defaults",
   charts: "Consumption trends over time",
   deletions: "Full record of edits and deletions",
@@ -821,6 +835,49 @@ function DeptPill({ active, onClick, label, color }) {
     >
       {label}
     </button>
+  );
+}
+
+function DevicesBoard({ reagents, devices, warnDays }) {
+  const active = (reagents || []).filter((r) => !r.deleted);
+
+  if (!devices || devices.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "60px 20px", color: THEME.textMuted, fontSize: 13.5 }}>
+        No devices added yet. Add your lab's analyzers from Settings → Devices.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {devices.map((d) => {
+        const activeLots = active.filter((r) => r.device === d.name && r.active_on_device);
+        return (
+          <Panel key={d.id} title={d.name} action={<span style={{ fontSize: 12, color: THEME.textMuted }}>{d.department}</span>}>
+            {activeLots.length === 0 ? (
+              <div style={{ fontSize: 13, color: THEME.textMuted }}>No active lot recorded on this device yet — logging a use will mark one automatically.</div>
+            ) : (
+              activeLots.map((r) => {
+                const m = STATUS_META[statusOf(r, warnDays)];
+                const dExp = daysBetween(r.expiry_date, todayISO());
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{r.name}</div>
+                      <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {r.lot_number} · {r.current_quantity} {r.unit} left</div>
+                    </div>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
+                      {dExp < 0 ? "Expired" : `${dExp}d left`}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </Panel>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1209,6 +1266,9 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
 
   const lots = reagents.filter((r) => r.name === name && (r.device || "") === device).sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
   const fefo = lots[0];
+  const currentActiveLot = device ? reagents.find((r) => r.name === name && r.device === device && r.active_on_device) : null;
+  const showReplaceChoice = !!(device && fefo && currentActiveLot && currentActiveLot.id !== fefo.id);
+  const [replaceOnDevice, setReplaceOnDevice] = useState(true);
 
   function changeType(t) {
     setTypeFilter(t);
@@ -1234,7 +1294,7 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
 
   function submit() {
     if (!fefo || !amount || !usedBy) return;
-    onSubmit({ reagentId: fefo.id, amount: Number(amount), date, usedBy, note, testedByQC });
+    onSubmit({ reagentId: fefo.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true });
   }
 
   if (reagents.length === 0) {
@@ -1274,6 +1334,15 @@ function LogConsumptionModal({ reagents, username, onClose, onSubmit }) {
         {fefo && (
           <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#0F5F5B" }}>
             FEFO suggests <b>Lot {fefo.lot_number}</b> ({fefo.current_quantity} {fefo.unit} left, expires {fefo.expiry_date}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}
+          </div>
+        )}
+        {showReplaceChoice && (
+          <div style={{ background: "#FFF7ED", border: "1px solid #FDBA74", borderRadius: 7, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12.5, color: "#7C3E00", marginBottom: 8 }}>
+              Lot <b>{currentActiveLot.lot_number}</b> is currently marked active on <b>{device}</b>. Does this replace it?
+            </div>
+            <YesNoRow label="Replace the lot active on this device" value={replaceOnDevice} onChange={setReplaceOnDevice} />
+            {!replaceOnDevice && <div style={{ fontSize: 11.5, color: "#7C3E00", marginTop: 6 }}>Both lots will show as active on this device — use this only if the device genuinely holds two lots at once.</div>}
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
