@@ -6,6 +6,7 @@ import Settings from "./Settings";
 import BarcodeScanner from "./BarcodeScanner";
 import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -19,13 +20,16 @@ const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000)
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString() : "");
 
 const THEME = {
-  primary: "#2563EB",
-  primaryDark: "#1D4ED8",
-  bg: "#F8FAFC",
-  cardBorder: "#E5E7EB",
+  primary: "#0F7173",
+  primaryLight: "#5FBFB0",
+  sidebarBg: "#1B2B2E",
+  sidebarText: "#8FA39E",
+  sidebarTextActive: "#F0F3F2",
+  bg: "#F0F3F2",
+  cardBorder: "#E1E8E5",
   cardShadow: "0 8px 24px rgba(0,0,0,0.06)",
-  text: "#0F172A",
-  textMuted: "#64748B",
+  text: "#1B2B2E",
+  textMuted: "#7B8E8A",
 };
 
 function statusOf(item, warnDays = 30) {
@@ -424,14 +428,14 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
   const go = (t) => { setTab(t); onCloseMobile(); };
   const initial = (username || "?").charAt(0).toUpperCase();
   return (
-    <aside className={`sidebar-desktop${open ? " open" : ""}`} style={{ width: 264, background: "#fff", borderRight: `1px solid ${THEME.cardBorder}`, display: "flex", flexDirection: "column", padding: "22px 16px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px 22px", borderBottom: `1px solid ${THEME.cardBorder}`, marginBottom: 18 }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-          <Beaker size={19} color="#fff" />
+    <aside className={`sidebar-desktop${open ? " open" : ""}`} style={{ width: 264, background: THEME.sidebarBg, borderRight: "none", display: "flex", flexDirection: "column", padding: "22px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px 22px", borderBottom: "1px solid rgba(255,255,255,0.1)", marginBottom: 18 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: THEME.primaryLight, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Beaker size={19} color={THEME.sidebarBg} />
         </div>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: THEME.text }}>Reagent Log</div>
-          <div style={{ fontSize: 11.5, color: THEME.textMuted }}>LTC Lab Inventory</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: THEME.sidebarTextActive }}>Reagent Log</div>
+          <div style={{ fontSize: 11.5, color: THEME.sidebarText }}>LTC Lab Inventory</div>
         </div>
       </div>
 
@@ -449,41 +453,32 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
             <SideItem active={tab === "settings"} onClick={() => go("settings")} icon={<SlidersHorizontal size={16} />} label="Settings" />
           </>
         )}
+
+        {(can("log_use") || can("receive")) && <SideGroup label="Actions" />}
+        {can("log_use") && <SideItem active={false} onClick={() => { onLog(); onCloseMobile(); }} icon={<TrendingDown size={16} />} label="Log use" />}
+        {can("receive") && <SideItem active={false} onClick={() => { onAdd(); onCloseMobile(); }} icon={<Plus size={16} />} label="Receive stock" />}
       </nav>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
-        {can("log_use") && (
-          <button onClick={onLog} style={{ background: "#fff", border: `1px solid ${THEME.primary}`, color: THEME.primary, borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
-            <TrendingDown size={15} /> Log use
-          </button>
-        )}
-        {can("receive") && (
-          <button onClick={onAdd} style={{ background: THEME.primary, border: "none", color: "#fff", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
-            <Plus size={15} /> Receive stock
-          </button>
-        )}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${THEME.cardBorder}` }}>
-        <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EFF6FF", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5, flexShrink: 0 }}>{initial}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid rgba(255,255,255,0.1)` }}>
+        <div style={{ width: 34, height: 34, borderRadius: "50%", background: THEME.primaryLight, color: THEME.sidebarBg, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5, flexShrink: 0 }}>{initial}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
-          <div style={{ fontSize: 11, color: THEME.textMuted }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: THEME.sidebarTextActive, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
+          <div style={{ fontSize: 11, color: THEME.sidebarText }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
         </div>
-        <button onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><KeyRound size={15} /></button>
-        <button onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><LogOut size={15} /></button>
+        <button onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><KeyRound size={15} /></button>
+        <button onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><LogOut size={15} /></button>
       </div>
     </aside>
   );
 }
 
 function SideGroup({ label }) {
-  return <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.6, textTransform: "uppercase", padding: "16px 10px 6px" }}>{label}</div>;
+  return <div style={{ fontSize: 10.5, fontWeight: 700, color: THEME.sidebarText, letterSpacing: 0.6, textTransform: "uppercase", padding: "16px 10px 6px" }}>{label}</div>;
 }
 
 function SideItem({ active, onClick, icon, label }) {
   return (
-    <button onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: active ? "#EFF6FF" : "transparent", color: active ? THEME.primary : "#475569", border: "none", borderRadius: 8, padding: "9px 10px", fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: 2, textAlign: "left" }}>
+    <button onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: active ? "rgba(95,191,176,0.15)" : "transparent", color: active ? THEME.primaryLight : THEME.sidebarText, border: "none", borderRadius: 8, padding: "9px 10px", fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: 2, textAlign: "left" }}>
       {icon} {label}
     </button>
   );
@@ -517,7 +512,7 @@ function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
           <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: "#fff", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: 9, color: "#475569" }}><Bell size={16} /></button>
           <div className="topbar-date" style={{ fontSize: 13, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{today}</div>
-          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EFF6FF", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5 }}>{initial}</div>
+          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#E4F4F1", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5 }}>{initial}</div>
         </div>
       </div>
     </div>
@@ -595,6 +590,19 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
   const reagentById = {};
   groups.forEach((g) => g.items.forEach((i) => { reagentById[i.id] = { name: g.name, device: g.device, unit: g.unit }; }));
 
+  const chartData = (() => {
+    const days = [];
+    const today = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const byDay = {};
+    (logs || []).forEach((l) => { if (!l.deleted) byDay[l.date] = (byDay[l.date] || 0) + Number(l.amount || 0); });
+    return days.map((d) => ({ date: d.slice(5), qty: byDay[d] || 0 }));
+  })();
+
   const term = search.trim().toLowerCase();
   let filteredGroups = term
     ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.fefo.lot_number.toLowerCase().includes(term) || g.device.toLowerCase().includes(term))
@@ -614,7 +622,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
   return (
     <div>
       <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCardV2 icon={<Beaker size={20} />} iconBg="#EFF6FF" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
+        <StatCardV2 icon={<Beaker size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
         <StatCardV2 icon={<AlertTriangle size={20} />} iconBg="#FFF7ED" iconColor="#EA580C" value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
         <StatCardV2 icon={<Clock size={20} />} iconBg="#FEF2F2" iconColor="#DC2626" value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
         <StatCardV2 icon={<Cpu size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={(devices || []).length} label="Connected devices" />
@@ -639,6 +647,26 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
           })}
         </Panel>
 
+        <Panel title="Usage analytics" action={<span style={{ fontSize: 12, color: THEME.textMuted }}>Last 30 days</span>}>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="usageFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={THEME.primary} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={THEME.primary} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={THEME.cardBorder} vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 10.5, fill: THEME.textMuted }} interval={4} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10.5, fill: THEME.textMuted }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, border: `1px solid ${THEME.cardBorder}` }} />
+              <Area type="monotone" dataKey="qty" stroke={THEME.primary} strokeWidth={2} fill="url(#usageFill)" name="Used" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Panel>
+      </div>
+
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <Panel title="Low stock" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("low")}>View all</span>}>
           {lowStockList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing low on stock.</div>}
           {lowStockList.map((g) => (
@@ -651,40 +679,40 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
             </div>
           ))}
         </Panel>
-      </div>
 
-      <Panel title="Recent usage" >
-        {recentUsage.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet.</div>}
-        {recentUsage.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Reagent</th>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Used by</th>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Date</th>
-                  <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Qty</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentUsage.map((l) => {
-                  const r = reagentById[l.reagent_id] || {};
-                  return (
-                    <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}` }}>
-                      <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name || "—"}</td>
-                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.used_by}</td>
-                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
-                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.date}</td>
-                      <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.amount} {r.unit || ""}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        <Panel title="Recent usage">
+          {recentUsage.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet.</div>}
+          {recentUsage.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Reagent</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Used by</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Date</th>
+                    <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentUsage.map((l) => {
+                    const r = reagentById[l.reagent_id] || {};
+                    return (
+                      <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}` }}>
+                        <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name || "—"}</td>
+                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.used_by}</td>
+                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
+                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.date}</td>
+                        <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.amount} {r.unit || ""}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
         )}
-      </Panel>
+        </Panel>
+      </div>
 
       <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "28px 0 14px" }}>All reagents</div>
 
