@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import Settings from "./Settings";
@@ -17,6 +17,16 @@ const INSPECTION_KEYS = ["intact_container", "complete_compound", "expiration_va
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString() : "");
+
+const THEME = {
+  primary: "#2563EB",
+  primaryDark: "#1D4ED8",
+  bg: "#F8FAFC",
+  cardBorder: "#E5E7EB",
+  cardShadow: "0 8px 24px rgba(0,0,0,0.06)",
+  text: "#0F172A",
+  textMuted: "#64748B",
+};
 
 function statusOf(item, warnDays = 30) {
   const dExp = daysBetween(item.expiry_date, todayISO());
@@ -65,6 +75,7 @@ export default function App() {
   const [showWizard, setShowWizard] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [editReagent, setEditReagent] = useState(null);
   const [editLog, setEditLog] = useState(null);
@@ -331,120 +342,223 @@ export default function App() {
   if (!role) return <Login config={config} staffAccounts={staffAccounts} onLogin={handleLogin} />;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F3F2", fontFamily: "'IBM Plex Sans', sans-serif", color: "#1B2B2E" }}>
+    <div style={{ minHeight: "100vh", background: THEME.bg, fontFamily: "'Inter', sans-serif", color: THEME.text, display: "flex" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         * { box-sizing: border-box; }
         button { font-family: inherit; cursor: pointer; }
         input, select { font-family: inherit; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-thumb { background: #C7D1CE; border-radius: 4px; }
-        @media (max-width: 640px) {
-          .nav-label { display: none; }
-          .app-actions button { padding: 8px 10px !important; }
-          .app-actions .btn-text { display: none; }
-          main { padding-left: 12px !important; padding-right: 12px !important; }
+        ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+        .hover-lift { transition: all 0.2s ease; }
+        .hover-lift:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(0,0,0,0.09); }
+        .sidebar-desktop { display: block; }
+        .sidebar-mobile-toggle { display: none; }
+        @media (max-width: 880px) {
+          .sidebar-desktop { position: fixed; top: 0; left: 0; height: 100vh; z-index: 70; transform: translateX(-100%); transition: transform 0.25s ease; }
+          .sidebar-desktop.open { transform: translateX(0); box-shadow: 0 0 40px rgba(0,0,0,0.25); }
+          .sidebar-mobile-toggle { display: flex !important; }
+          .topbar-date { display: none; }
+          .main-content { padding-left: 14px !important; padding-right: 14px !important; }
         }
       `}</style>
 
-      <Header tab={tab} setTab={setTab} role={role} can={can} onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)} onLogout={logout} onEnableNotif={enableNotifications} onChangePassword={() => setShowChangePassword(true)} />
+      {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.4)", zIndex: 60 }} />}
 
-      <main style={{ maxWidth: 980, margin: "0 auto", padding: "24px 20px 80px" }}>
-        {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
-          <div style={{ background: "#FBEAE6", border: "1px solid #C1432B33", borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
-            <AlertTriangle size={18} color="#C1432B" />
-            <div style={{ flex: 1, fontSize: 13.5, color: "#8A2E1F" }}><b>{counts.red}</b> reagent{counts.red > 1 ? "s" : ""} expired or out of stock — needs attention now.</div>
-            <button onClick={() => setBannerDismissed(true)} style={{ background: "none", border: "none", color: "#8A2E1F" }}><X size={16} /></button>
-          </div>
-        )}
-        {counts.flagged > 0 && tab !== "settings" && (
-          <div style={{ background: "#FBF3DF", border: "1px solid #B8860B33", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
-            <ClipboardX size={18} color="#B8860B" />
-            <div style={{ flex: 1, fontSize: 13.5, color: "#7A5C08" }}><b>{counts.flagged}</b> reagent{counts.flagged > 1 ? "s" : ""} failed an inspection check on receipt — review before use.</div>
-          </div>
-        )}
+      <Sidebar
+        tab={tab} setTab={setTab} role={role} can={can}
+        onAdd={() => setShowWizard(true)} onLog={() => setShowLog(true)}
+        onLogout={logout} onChangePassword={() => setShowChangePassword(true)}
+        username={username} open={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)}
+      />
 
-        {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
-        {tab === "detail" && can("dashboard") && selectedGroup && (
-          <DetailView
-            group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
-            logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.key === selectedGroup.key)?.items || []).some((i) => i.id === l.reagent_id))}
-            role={role}
-            can={can}
-            warnDays={warnDays}
-            onBack={() => setTab("dashboard")}
-            onEditReagent={setEditReagent} onDeleteReagent={deleteReagent}
-            onEditLog={setEditLog} onDeleteLog={deleteLog}
-          />
-        )}
-        {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
-        {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
-        {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
-        {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
-      </main>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <TopBar tab={tab} role={role} username={username} onEnableNotif={enableNotifications} onMenuClick={() => setSidebarOpen(true)} />
+
+        <main className="main-content" style={{ maxWidth: 1160, margin: "0 auto", padding: "24px 28px 80px" }}>
+          {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
+            <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+              <AlertTriangle size={18} color="#DC2626" />
+              <div style={{ flex: 1, fontSize: 13.5, color: "#7F1D1D" }}><b>{counts.red}</b> reagent{counts.red > 1 ? "s" : ""} expired or out of stock — needs attention now.</div>
+              <button onClick={() => setBannerDismissed(true)} style={{ background: "none", border: "none", color: "#7F1D1D" }}><X size={16} /></button>
+            </div>
+          )}
+          {counts.flagged > 0 && tab !== "settings" && (
+            <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+              <ClipboardX size={18} color="#D97706" />
+              <div style={{ flex: 1, fontSize: 13.5, color: "#78350F" }}><b>{counts.flagged}</b> reagent{counts.flagged > 1 ? "s" : ""} failed an inspection check on receipt — review before use.</div>
+            </div>
+          )}
+
+          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
+          {tab === "detail" && can("dashboard") && selectedGroup && (
+            <DetailView
+              group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
+              logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.key === selectedGroup.key)?.items || []).some((i) => i.id === l.reagent_id))}
+              role={role}
+              can={can}
+              warnDays={warnDays}
+              onBack={() => setTab("dashboard")}
+              onEditReagent={setEditReagent} onDeleteReagent={deleteReagent}
+              onEditLog={setEditLog} onDeleteLog={deleteLog}
+            />
+          )}
+          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
+          {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
+          {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
+        </main>
+      </div>
 
       {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
-      {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#C1432B", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
+      {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#DC2626", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
     </div>
   );
 }
 
-function Header({ tab, setTab, role, can, onAdd, onLog, onLogout, onEnableNotif, onChangePassword }) {
+function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassword, username, open, onCloseMobile }) {
+  const go = (t) => { setTab(t); onCloseMobile(); };
+  const initial = (username || "?").charAt(0).toUpperCase();
   return (
-    <header style={{ borderBottom: "1px solid #D6DEDB", background: "#1B2B2E" }}>
-      <div style={{ maxWidth: 980, margin: "0 auto", padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Beaker size={22} color="#5FBFB0" />
-          <div>
-            <div style={{ color: "#F0F3F2", fontWeight: 700, fontSize: 17, letterSpacing: 0.2 }}>Reagent Log</div>
-            <div style={{ color: "#8FA39E", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }}>LTC Lab Inventory</div>
-          </div>
+    <aside className={`sidebar-desktop${open ? " open" : ""}`} style={{ width: 264, background: "#fff", borderRight: `1px solid ${THEME.cardBorder}`, display: "flex", flexDirection: "column", padding: "22px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px 22px", borderBottom: `1px solid ${THEME.cardBorder}`, marginBottom: 18 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Beaker size={19} color="#fff" />
         </div>
-        <div className="app-actions" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {can("dashboard") && <NavBtn active={tab === "dashboard" || tab === "detail"} onClick={() => setTab("dashboard")} icon={<LayoutGrid size={15} />} label="Dashboard" />}
-          {can("reports") && <NavBtn active={tab === "reports"} onClick={() => setTab("reports")} icon={<FileText size={15} />} label="Reports" />}
-          {can("settings") && <NavBtn active={tab === "settings"} onClick={() => setTab("settings")} icon={<SlidersHorizontal size={15} />} label="Settings" />}
-          {can("charts") && <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={<BarChart3 size={15} />} label="Charts" />}
-          {role === "owner" && <NavBtn active={tab === "deletions"} onClick={() => setTab("deletions")} icon={<History size={15} />} label="Activity" />}
-          <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><Bell size={14} /></button>
-          <div style={{ width: 1, height: 22, background: "#39494A", margin: "0 4px" }} />
-          {can("log_use") && <button onClick={onLog} title="Log use" style={{ background: "transparent", border: "1px solid #5FBFB0", color: "#5FBFB0", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><TrendingDown size={14} /> <span className="btn-text">Log use</span></button>}
-          {can("receive") && <button onClick={onAdd} title="Receive stock" style={{ background: "#5FBFB0", border: "none", color: "#0B2023", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> <span className="btn-text">Receive stock</span></button>}
-          <button onClick={onChangePassword} title="Change my password" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><KeyRound size={14} /></button>
-          <button onClick={onLogout} title="Log out" style={{ background: "transparent", border: "1px solid #39494A", color: "#8FA39E", borderRadius: 7, padding: "7px 9px" }}><LogOut size={14} /></button>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: THEME.text }}>Reagent Log</div>
+          <div style={{ fontSize: 11.5, color: THEME.textMuted }}>LTC Lab Inventory</div>
         </div>
       </div>
-    </header>
+
+      <nav style={{ flex: 1, overflowY: "auto" }}>
+        {can("dashboard") && <SideItem active={tab === "dashboard" || tab === "detail"} onClick={() => go("dashboard")} icon={<LayoutGrid size={16} />} label="Dashboard" />}
+
+        <SideGroup label="Tracking" />
+        {can("reports") && <SideItem active={tab === "reports"} onClick={() => go("reports")} icon={<FileText size={16} />} label="Reports" />}
+        {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
+        {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
+
+        {can("settings") && (
+          <>
+            <SideGroup label="Management" />
+            <SideItem active={tab === "settings"} onClick={() => go("settings")} icon={<SlidersHorizontal size={16} />} label="Settings" />
+          </>
+        )}
+      </nav>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+        {can("log_use") && (
+          <button onClick={onLog} style={{ background: "#fff", border: `1px solid ${THEME.primary}`, color: THEME.primary, borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+            <TrendingDown size={15} /> Log use
+          </button>
+        )}
+        {can("receive") && (
+          <button onClick={onAdd} style={{ background: THEME.primary, border: "none", color: "#fff", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <Plus size={15} /> Receive stock
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${THEME.cardBorder}` }}>
+        <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EFF6FF", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5, flexShrink: 0 }}>{initial}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
+          <div style={{ fontSize: 11, color: THEME.textMuted }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
+        </div>
+        <button onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><KeyRound size={15} /></button>
+        <button onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><LogOut size={15} /></button>
+      </div>
+    </aside>
   );
 }
 
-function NavBtn({ active, onClick, icon, label }) {
-  return <button onClick={onClick} title={label} style={{ background: active ? "#2A3B3D" : "transparent", color: active ? "#F0F3F2" : "#8FA39E", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{icon} <span className="nav-label">{label}</span></button>;
+function SideGroup({ label }) {
+  return <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.6, textTransform: "uppercase", padding: "16px 10px 6px" }}>{label}</div>;
 }
 
-function StatCard({ status, count, label, active, onClick }) {
-  const m = STATUS_META[status];
+function SideItem({ active, onClick, icon, label }) {
+  return (
+    <button onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: active ? "#EFF6FF" : "transparent", color: active ? THEME.primary : "#475569", border: "none", borderRadius: 8, padding: "9px 10px", fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: 2, textAlign: "left" }}>
+      {icon} {label}
+    </button>
+  );
+}
+
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_SUBTITLES = {
+  dashboard: "Overview of laboratory inventory",
+  detail: "Reagent lot details",
+  reports: "Full inventory and consumption history",
+  settings: "Manage users, permissions, and defaults",
+  charts: "Consumption trends over time",
+  deletions: "Full record of edits and deletions",
+};
+
+function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
+  const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const initial = (username || "?").charAt(0).toUpperCase();
+  return (
+    <div style={{ background: "#fff", borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
+      <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <button className="sidebar-mobile-toggle" onClick={onMenuClick} style={{ display: "none", background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text, flexShrink: 0 }}>
+            <Menu size={18} />
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_TITLES[tab] || "Reagent Log"}</div>
+            <div style={{ fontSize: 13, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_SUBTITLES[tab] || ""}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: "#fff", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: 9, color: "#475569" }}><Bell size={16} /></button>
+          <div className="topbar-date" style={{ fontSize: 13, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{today}</div>
+          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EFF6FF", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5 }}>{initial}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCardV2({ icon, iconBg, iconColor, value, label, active, onClick }) {
   return (
     <button
       onClick={onClick}
+      className="hover-lift"
       style={{
-        background: m.bg,
-        border: `1.5px solid ${active ? m.color : m.color + "22"}`,
-        borderRadius: 10,
-        padding: "16px 18px",
+        background: "#fff",
+        border: `1px solid ${active ? iconColor : THEME.cardBorder}`,
+        borderRadius: 16,
+        boxShadow: active ? `0 0 0 2px ${iconColor}33` : THEME.cardShadow,
+        padding: 20,
         flex: 1,
-        minWidth: 140,
+        minWidth: 160,
         textAlign: "left",
-        boxShadow: active ? `0 0 0 2px ${m.color}33` : "none",
+        cursor: onClick ? "pointer" : "default",
       }}
     >
-      <div style={{ fontSize: 28, fontWeight: 700, color: m.color, fontFamily: "'IBM Plex Mono', monospace" }}>{count}</div>
-      <div style={{ fontSize: 13, color: "#516361", fontWeight: 500 }}>{label}</div>
+      <div style={{ width: 44, height: 44, borderRadius: "50%", background: iconBg, color: iconColor, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
+        {icon}
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, fontFamily: "'Inter', sans-serif", lineHeight: 1.1 }}>{value}</div>
+      <div style={{ fontSize: 13, color: THEME.textMuted, marginTop: 4 }}>{label}</div>
     </button>
+  );
+}
+
+function Panel({ title, action, children }) {
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: 20, flex: 1, minWidth: 300 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -457,7 +571,7 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect }) {
+function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onSelect }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
   const [deviceFilter, setDeviceFilter] = useState("all");
@@ -474,6 +588,12 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
   }
 
   const allDevices = [...new Set(groups.map((g) => g.device).filter(Boolean))].sort();
+
+  const expiringList = groups.filter((g) => g.expiringSoon).sort((a, b) => new Date(a.fefo.expiry_date) - new Date(b.fefo.expiry_date)).slice(0, 5);
+  const lowStockList = groups.filter((g) => g.lowStock).slice(0, 5);
+  const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
+  const reagentById = {};
+  groups.forEach((g) => g.items.forEach((i) => { reagentById[i.id] = { name: g.name, device: g.device, unit: g.unit }; }));
 
   const term = search.trim().toLowerCase();
   let filteredGroups = term
@@ -493,28 +613,96 @@ function Dashboard({ groups, counts, departments, can, onDeleteReagent, onSelect
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+        <StatCardV2 icon={<Beaker size={20} />} iconBg="#EFF6FF" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
+        <StatCardV2 icon={<AlertTriangle size={20} />} iconBg="#FFF7ED" iconColor="#EA580C" value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
+        <StatCardV2 icon={<Clock size={20} />} iconBg="#FEF2F2" iconColor="#DC2626" value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
+        <StatCardV2 icon={<Cpu size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={(devices || []).length} label="Connected devices" />
+      </div>
+
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+        <Panel title="Expiring soon" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("expiring")}>View all</span>}>
+          {expiringList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing expiring soon.</div>}
+          {expiringList.map((g) => {
+            const dExp = daysBetween(g.fefo.expiry_date, todayISO());
+            return (
+              <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {g.fefo.lot_number}</div>
+                </div>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: dExp < 0 ? "#DC2626" : "#EA580C", background: dExp < 0 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
+                  {dExp < 0 ? "Expired" : `${dExp}d left`}
+                </span>
+              </div>
+            );
+          })}
+        </Panel>
+
+        <Panel title="Low stock" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("low")}>View all</span>}>
+          {lowStockList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing low on stock.</div>}
+          {lowStockList.map((g) => (
+            <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Min {g.fefo.low_stock_threshold} {g.unit}</div>
+              </div>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{g.totalQty} {g.unit}</span>
+            </div>
+          ))}
+        </Panel>
+      </div>
+
+      <Panel title="Recent usage" >
+        {recentUsage.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet.</div>}
+        {recentUsage.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Reagent</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Used by</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Date</th>
+                  <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentUsage.map((l) => {
+                  const r = reagentById[l.reagent_id] || {};
+                  return (
+                    <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}` }}>
+                      <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name || "—"}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.used_by}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.date}</td>
+                      <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.amount} {r.unit || ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "28px 0 14px" }}>All reagents</div>
+
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <input
           placeholder="Search reagent, lot number, or device…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: 2, minWidth: 200, border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 16, boxSizing: "border-box" }}
+          style={{ flex: 2, minWidth: 200, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box" }}
         />
         <select
           value={deviceFilter}
           onChange={(e) => setDeviceFilter(e.target.value)}
-          style={{ flex: 1, minWidth: 160, border: "1px solid #C7D1CE", borderRadius: 8, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: "#fff" }}
+          style={{ flex: 1, minWidth: 160, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: "#fff" }}
         >
           <option value="all">All devices</option>
           {allDevices.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
-      </div>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-        <StatCard status="red" count={counts.red} label="Critical — expired or out" active={statusFilter === "critical"} onClick={() => setStatusFilter(statusFilter === "critical" ? "all" : "critical")} />
-        <StatCard status="low" count={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
-        <StatCard status="expiring" count={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
-        <StatCard status="green" count={counts.green} label="Stable" active={statusFilter === "stable"} onClick={() => setStatusFilter(statusFilter === "stable" ? "all" : "stable")} />
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 22, overflowX: "auto", paddingBottom: 2 }}>
