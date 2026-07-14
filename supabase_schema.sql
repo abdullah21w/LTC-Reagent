@@ -10,7 +10,7 @@ create table if not exists reagents (
   unit text not null,
   quantity_received numeric not null,
   current_quantity numeric not null,
-  expiry_date date not null,
+  expiry_date date,
   date_added date not null default current_date,
   added_by text not null,
   low_stock_threshold numeric not null default 0,

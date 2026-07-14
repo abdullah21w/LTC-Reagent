@@ -33,16 +33,29 @@ const THEME = {
 };
 
 function statusOf(item, warnDays = 30) {
-  const dExp = daysBetween(item.expiry_date, todayISO());
   const lowStock = item.current_quantity <= item.low_stock_threshold;
-  if (dExp < 0 || item.current_quantity <= 0) return "red";
+  if (item.current_quantity <= 0) return "red";
+  if (!item.expiry_date) return lowStock ? "yellow" : "green";
+  const dExp = daysBetween(item.expiry_date, todayISO());
+  if (dExp < 0) return "red";
   if (dExp <= warnDays || lowStock) return "yellow";
   return "green";
 }
 
 function isExpiringSoonItem(item, warnDays) {
+  if (!item.expiry_date) return false;
   const dExp = daysBetween(item.expiry_date, todayISO());
   return dExp >= 0 && dExp <= warnDays;
+}
+
+// Sorts lots for FEFO use: dated lots first (soonest expiry first), then
+// undated lots ordered oldest-received first (FIFO) since there's no expiry
+// to prioritize by.
+function compareLots(a, b) {
+  const aHas = !!a.expiry_date, bHas = !!b.expiry_date;
+  if (aHas && bHas) return new Date(a.expiry_date) - new Date(b.expiry_date);
+  if (aHas !== bHas) return aHas ? -1 : 1;
+  return new Date(a.date_added) - new Date(b.date_added);
 }
 
 const LOT_TO_LOT_DEVICES = ["vitros"];
@@ -196,7 +209,7 @@ export default function App() {
       unit: entry.unit,
       quantity_received: entry.quantityReceived,
       current_quantity: entry.quantityReceived,
-      expiry_date: entry.expiryDate,
+      expiry_date: entry.expiryDate || null,
       date_added: entry.receivedDate,
       added_by: entry.receivedBy,
       low_stock_threshold: entry.lowStockThreshold,
@@ -262,7 +275,7 @@ export default function App() {
       lot_number: updated.lot_number,
       quantity_received: updated.quantity_received,
       current_quantity: updated.current_quantity,
-      expiry_date: updated.expiry_date,
+      expiry_date: updated.expiry_date || null,
       low_stock_threshold: updated.low_stock_threshold,
       edited_by: username,
       edited_at: new Date().toISOString(),
@@ -354,10 +367,10 @@ export default function App() {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
     return Object.entries(map).map(([key, items]) => {
-      const sorted = [...items].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
+      const sorted = [...items].sort(compareLots);
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
       const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
-      const anyExpiredOrEmpty = items.some((i) => daysBetween(i.expiry_date, todayISO()) < 0 || i.current_quantity <= 0);
+      const anyExpiredOrEmpty = items.some((i) => (i.expiry_date && daysBetween(i.expiry_date, todayISO()) < 0) || i.current_quantity <= 0);
       const flagged = items.some(hasInspectionIssue);
       const lowStock = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
       const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
@@ -683,7 +696,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
 
   const allDevices = [...new Set(groups.map((g) => g.device).filter(Boolean))].sort();
 
-  const expiringList = groups.filter((g) => g.expiringSoon).sort((a, b) => new Date(a.fefo.expiry_date) - new Date(b.fefo.expiry_date)).slice(0, 5);
+  const expiringList = groups.filter((g) => g.expiringSoon).sort((a, b) => new Date(a.fefo.expiry_date || 0) - new Date(b.fefo.expiry_date || 0)).slice(0, 5);
   const lowStockList = groups.filter((g) => g.lowStock).slice(0, 5);
   const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   const reagentById = {};
@@ -755,7 +768,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
           {(devices || []).slice(0, 5).map((d) => {
             const activeLot = groups.flatMap((g) => g.items).find((i) => i.device === d.name && i.active_on_device);
             const m = activeLot ? STATUS_META[statusOf(activeLot, 30)] : null;
-            const dExp = activeLot ? daysBetween(activeLot.expiry_date, todayISO()) : null;
+            const dExp = activeLot && activeLot.expiry_date ? daysBetween(activeLot.expiry_date, todayISO()) : null;
             return (
               <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
                 <div style={{ minWidth: 0 }}>
@@ -764,7 +777,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                 </div>
                 {activeLot && (
                   <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                    {dExp < 0 ? "Expired" : `${dExp}d left`}
+                    {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
                   </span>
                 )}
               </div>
@@ -894,7 +907,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
             {items.map((g) => {
               const m = STATUS_META[g.status];
               const pct = g.totalReceived > 0 ? (g.totalQty / g.totalReceived) * 100 : 0;
-              const dExp = daysBetween(g.fefo.expiry_date, todayISO());
+              const dExp = g.fefo.expiry_date ? daysBetween(g.fefo.expiry_date, todayISO()) : null;
               return (
                 <div key={g.key} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
                   <GaugeBar pct={pct} color={m.color} />
@@ -918,7 +931,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
-                    <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
+                    <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
                   </div>
                   {can("delete") && (
                     <button
@@ -983,7 +996,7 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
             ) : (
               activeLots.map((r) => {
                 const m = STATUS_META[statusOf(r, warnDays)];
-                const dExp = daysBetween(r.expiry_date, todayISO());
+                const dExp = r.expiry_date ? daysBetween(r.expiry_date, todayISO()) : null;
                 return (
                   <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: `1px solid ${THEME.cardBorder}`, flexWrap: "wrap" }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
@@ -991,7 +1004,7 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
                       <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {r.lot_number} · {r.current_quantity} {r.unit} left</div>
                     </div>
                     <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                      {dExp < 0 ? "Expired" : `${dExp}d left`}
+                      {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
                     </span>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       {can("edit") && (
@@ -1056,7 +1069,7 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>LOTS — use earliest expiry first (FEFO)</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 26 }}>
         {group.items.map((it, idx) => {
-          const dExp = daysBetween(it.expiry_date, todayISO());
+          const dExp = it.expiry_date ? daysBetween(it.expiry_date, todayISO()) : null;
           const m = STATUS_META[statusOf(it, warnDays)];
           const failedItems = INSPECTION_KEYS.filter((k) => it[k] === false).map((k) => inspectionLabels[k]);
           return (
@@ -1065,7 +1078,7 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
                 {idx === 0 && <span style={{ background: "#0F7173", color: "#fff", fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4 }}>USE FIRST</span>}
                 <div style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>Lot {it.lot_number}</div>
                 <div style={{ fontSize: 13 }}>{it.current_quantity}/{it.quantity_received} {it.unit}</div>
-                <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
+                <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
                 {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
                 {can("delete") && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
               </div>
@@ -1258,7 +1271,7 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
                     <div><div style={{ color: "#2F6B4F", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Received by</div>{r.added_by}</div>
                     <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Received date</div>{r.date_added}</div>
-                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Expiry date</div>{r.expiry_date}</div>
+                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Expiry date</div>{r.expiry_date || "No expiry"}</div>
                     <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Quantity</div>{r.current_quantity}/{r.quantity_received} {r.unit}</div>
                   </div>
 
@@ -1401,7 +1414,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
   const [testedByQC, setTestedByQC] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
-  const lots = reagents.filter((r) => r.name === name && (r.device || "") === device).sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
+  const lots = reagents.filter((r) => r.name === name && (r.device || "") === device).sort(compareLots);
   const fefo = lots[0];
   const currentActiveLot = device ? reagents.find((r) => r.name === name && r.device === device && r.active_on_device) : null;
   const showReplaceChoice = !!(device && fefo && currentActiveLot && currentActiveLot.id !== fefo.id);
@@ -1475,7 +1488,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
         {name && !fefo && <div style={{ fontSize: 12.5, color: "#C1432B" }}>No stock of "{name}" on this device.</div>}
         {fefo && (
           <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#0F5F5B" }}>
-            FEFO suggests <b>Lot {fefo.lot_number}</b> ({fefo.current_quantity} {fefo.unit} left, expires {fefo.expiry_date}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}
+            FEFO suggests <b>Lot {fefo.lot_number}</b> ({fefo.current_quantity} {fefo.unit} left, {fefo.expiry_date ? `expires ${fefo.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}
           </div>
         )}
         {showReplaceChoice && (
@@ -1525,7 +1538,7 @@ function EditReagentModal({ reagent, onClose, onSave }) {
           <label style={{ ...labelStyle, flex: 1 }}>Quantity received<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Current quantity<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} /></label>
         </div>
-        <label style={labelStyle}>Expiry date<input type="date" style={inputStyle} value={form.expiry_date} onChange={set("expiry_date")} /></label>
+        <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
         <label style={labelStyle}>Low stock alert below<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
         <button
           onClick={() => onSave({ ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) })}

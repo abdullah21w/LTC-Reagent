@@ -46,7 +46,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
 
   const devicesForDept = (devices || []).filter((d) => d.department === form.department);
 
-  const step1Valid = form.name && form.lotNumber && form.quantityReceived && form.expiryDate && form.receivedBy && form.receivedDate;
+  const step1Valid = form.name && form.lotNumber && form.quantityReceived && form.receivedBy && form.receivedDate;
 
   function finish() {
     onSubmit({
@@ -103,7 +103,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
               </button>
               <label style={{ ...labelStyle, width: 80 }}>Unit<input style={inputStyle} value={form.unit} onChange={set("unit")} /></label>
             </div>
-            <label style={labelStyle}>Expiry date<input type="date" style={inputStyle} value={form.expiryDate} onChange={set("expiryDate")} /></label>
+            <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiryDate} onChange={set("expiryDate")} /></label>
             <div style={{ display: "flex", gap: 10 }}>
               <label style={{ ...labelStyle, flex: 1 }}>Quantity received<input type="number" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
               <label style={{ ...labelStyle, flex: 1 }}>Low stock alert below<input type="number" style={inputStyle} value={form.lowStockThreshold} onChange={set("lowStockThreshold")} placeholder={`default: ${defaultLowStock || 5}`} /></label>
