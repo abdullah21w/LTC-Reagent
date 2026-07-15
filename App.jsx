@@ -1429,8 +1429,10 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
 
   const lots = reagents.filter((r) => r.name === name && (r.device || "") === device).sort(compareLots);
   const fefo = lots[0];
+  const [selectedLotId, setSelectedLotId] = useState("");
+  const chosenLot = (selectedLotId && lots.find((l) => l.id === selectedLotId)) || fefo;
   const currentActiveLot = device ? reagents.find((r) => r.name === name && r.device === device && r.active_on_device) : null;
-  const showReplaceChoice = !!(device && fefo && currentActiveLot && currentActiveLot.id !== fefo.id);
+  const showReplaceChoice = !!(device && chosenLot && currentActiveLot && currentActiveLot.id !== chosenLot.id);
   const [replaceOnDevice, setReplaceOnDevice] = useState(true);
 
   const pendingLtl = needsLotToLot(device) ? (lotToLotPending || []).find((p) => p.reagent_name === name && p.device === device && !p.confirmed) : null;
@@ -1448,6 +1450,12 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
     setName(newName);
     const opts = [...new Set(reagents.filter((r) => r.name === newName).map((r) => r.device || ""))];
     setDevice(opts[0] || "");
+    setSelectedLotId("");
+  }
+
+  function changeDevice(newDevice) {
+    setDevice(newDevice);
+    setSelectedLotId("");
   }
 
   function handleScan(text) {
@@ -1455,14 +1463,15 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
     if (match) {
       setName(match.name);
       setDevice(match.device || "");
+      setSelectedLotId(match.id);
     }
     setShowScanner(false);
   }
 
   function submit() {
-    if (!fefo || !amount || !usedBy) return;
+    if (!chosenLot || !amount || !usedBy) return;
     if (pendingLtl && !ltlConfirmed) return;
-    onSubmit({ reagentId: fefo.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
+    onSubmit({ reagentId: chosenLot.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
   }
 
   if (reagents.length === 0) {
@@ -1493,15 +1502,30 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
         {names.length === 0 && <div style={{ fontSize: 12.5, color: "#8A9694" }}>No items of this type in stock.</div>}
         {devicesForName.some(Boolean) && (
           <label style={labelStyle}>Device used
-            <select style={inputStyle} value={device} onChange={(e) => setDevice(e.target.value)}>
+            <select style={inputStyle} value={device} onChange={(e) => changeDevice(e.target.value)}>
               {devicesForName.map((d) => <option key={d || "none"} value={d}>{d || "No device specified"}</option>)}
             </select>
           </label>
         )}
         {name && !fefo && <div style={{ fontSize: 12.5, color: "#C1432B" }}>No stock of "{name}" on this device.</div>}
-        {fefo && (
+        {lots.length > 0 && (
+          <label style={labelStyle}>Lot to use
+            <select style={inputStyle} value={chosenLot ? chosenLot.id : ""} onChange={(e) => setSelectedLotId(e.target.value)}>
+              {lots.map((l, idx) => (
+                <option key={l.id} value={l.id}>
+                  Lot {l.lot_number} — {l.current_quantity} {l.unit} left — {l.expiry_date ? `expires ${l.expiry_date}` : "no expiry"}{idx === 0 ? " (FEFO suggestion)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {chosenLot && (
           <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#0F5F5B" }}>
-            FEFO suggests <b>Lot {fefo.lot_number}</b> ({fefo.current_quantity} {fefo.unit} left, {fefo.expiry_date ? `expires ${fefo.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}
+            {selectedLotId && chosenLot.id !== fefo.id ? (
+              <>You picked <b>Lot {chosenLot.lot_number}</b> instead of the FEFO suggestion (Lot {fefo.lot_number}).</>
+            ) : (
+              <>Using <b>Lot {chosenLot.lot_number}</b> ({chosenLot.current_quantity} {chosenLot.unit} left, {chosenLot.expiry_date ? `expires ${chosenLot.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}</>
+            )}
           </div>
         )}
         {showReplaceChoice && (
@@ -1525,7 +1549,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({fefo?.unit || "unit"})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({chosenLot?.unit || "unit"})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
         <label style={labelStyle}>Used by
@@ -1533,7 +1557,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
         </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
-        <button onClick={submit} disabled={!fefo || (pendingLtl && !ltlConfirmed)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!fefo || (pendingLtl && !ltlConfirmed)) ? 0.5 : 1 }}>Save log</button>
+        <button onClick={submit} disabled={!chosenLot || (pendingLtl && !ltlConfirmed)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!chosenLot || (pendingLtl && !ltlConfirmed)) ? 0.5 : 1 }}>Save log</button>
       </div>
       {showScanner && <BarcodeScanner onClose={() => setShowScanner(false)} onDetected={handleScan} />}
     </Modal>
