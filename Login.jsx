@@ -18,7 +18,7 @@ export default function Login({ config, staffAccounts, onLogin }) {
     if (username === config.owner_username && (await verifyPassword(password, config.owner_password))) {
       if (!isHashed(config.owner_password)) {
         const newHash = await hashPassword(password);
-        supabase.from("app_config").update({ owner_password: newHash }).eq("id", 1);
+        await supabase.from("app_config").update({ owner_password: newHash }).eq("id", 1);
       }
       onLogin("owner", username, null, null);
       return;
@@ -28,7 +28,7 @@ export default function Login({ config, staffAccounts, onLogin }) {
       if (s.username === username && (await verifyPassword(password, s.password))) {
         if (!isHashed(s.password)) {
           const newHash = await hashPassword(password);
-          supabase.from("staff_accounts").update({ password: newHash }).eq("id", s.id);
+          await supabase.from("staff_accounts").update({ password: newHash }).eq("id", s.id);
         }
         onLogin("staff", username, s.permissions || {}, s.id);
         return;
