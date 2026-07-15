@@ -755,9 +755,12 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
                   <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {g.fefo.lot_number}</div>
                 </div>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: dExp < 0 ? "#DC2626" : "#EA580C", background: dExp < 0 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                  {dExp < 0 ? "Expired" : `${dExp}d left`}
-                </span>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dExp < 0 ? "#DC2626" : "#EA580C", background: dExp < 0 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px" }}>
+                    {dExp < 0 ? "Expired" : `${dExp}d left`}
+                  </span>
+                  <div style={{ fontSize: 10.5, color: THEME.textMuted, marginTop: 3 }}>{g.fefo.expiry_date}</div>
+                </div>
               </div>
             );
           })}
@@ -776,9 +779,12 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                   <div style={{ fontSize: 11.5, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeLot ? `${activeLot.name} · Lot ${activeLot.lot_number}` : "No active lot"}</div>
                 </div>
                 {activeLot && (
-                  <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                    {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
-                  </span>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px" }}>
+                      {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
+                    </span>
+                    {activeLot.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, marginTop: 3 }}>{activeLot.expiry_date}</div>}
+                  </div>
                 )}
               </div>
             );
@@ -932,6 +938,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
                     <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
+                    {g.fefo.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, opacity: 0.75, marginTop: 1 }}>{g.fefo.expiry_date}</div>}
                   </div>
                   {can("delete") && (
                     <button
@@ -1003,9 +1010,12 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
                       <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{r.name}</div>
                       <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {r.lot_number} · {r.current_quantity} {r.unit} left</div>
                     </div>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                      {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
-                    </span>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px" }}>
+                        {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
+                      </span>
+                      {r.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, marginTop: 3 }}>{r.expiry_date}</div>}
+                    </div>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       {can("edit") && (
                         <button onClick={() => onRemove(r.id)} title="Remove from this device (keeps it in inventory)" style={{ background: "none", border: `1px solid ${THEME.cardBorder}`, color: THEME.textMuted, borderRadius: 6, padding: "4px 8px", fontSize: 11 }}>
@@ -1078,7 +1088,10 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
                 {idx === 0 && <span style={{ background: "#0F7173", color: "#fff", fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4 }}>USE FIRST</span>}
                 <div style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>Lot {it.lot_number}</div>
                 <div style={{ fontSize: 13 }}>{it.current_quantity}/{it.quantity_received} {it.unit}</div>
-                <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
+                  {it.expiry_date && <div style={{ fontSize: 10.5, color: "#8A9694", marginTop: 1 }}>{it.expiry_date}</div>}
+                </div>
                 {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
                 {can("delete") && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
               </div>
