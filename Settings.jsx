@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Trash2, Plus, Save } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import { hashPassword } from "./passwordUtils";
 
 const PERMISSION_FIELDS = [
   { key: "dashboard", label: "Dashboard" },
@@ -109,7 +110,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
 
   async function addStaffAccount() {
     if (!newStaff.username || !newStaff.password) return;
-    const { error } = await supabase.from("staff_accounts").insert(newStaff);
+    const hashed = await hashPassword(newStaff.password);
+    const { error } = await supabase.from("staff_accounts").insert({ ...newStaff, password: hashed });
     if (error) {
       console.error("addStaffAccount error:", error);
       setStaffMsg(`Could not save: ${error.message}`);
@@ -317,10 +319,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
         <>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>LOGIN & DEFAULTS</div>
           <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", gap: 10 }}>
-              <label style={{ ...labelStyle, flex: 1 }}>Owner username<input style={inputStyle} value={creds.owner_username} onChange={(e) => setCreds((c) => ({ ...c, owner_username: e.target.value }))} /></label>
-              <label style={{ ...labelStyle, flex: 1 }}>Owner password<input style={inputStyle} value={creds.owner_password} onChange={(e) => setCreds((c) => ({ ...c, owner_password: e.target.value }))} /></label>
-            </div>
+            <label style={labelStyle}>Owner username<input style={inputStyle} value={creds.owner_username} onChange={(e) => setCreds((c) => ({ ...c, owner_username: e.target.value }))} /></label>
+            <div style={{ fontSize: 11.5, color: "#8A9694" }}>To change the owner password, use the 🔑 "Change my password" button in the sidebar — it keeps passwords securely hashed.</div>
             <label style={labelStyle}>Default low-stock alert (units remaining)
               <input type="number" min="1" style={inputStyle} value={creds.low_stock_default_percent} onChange={(e) => setCreds((c) => ({ ...c, low_stock_default_percent: Number(e.target.value) }))} />
               <div style={{ fontSize: 11.5, color: "#8A9694", fontWeight: 400, marginTop: 4 }}>New reagents get this as their default "low stock" number unless you type a different one at receiving time.</div>

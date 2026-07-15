@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
 import Settings from "./Settings";
 import BarcodeScanner from "./BarcodeScanner";
@@ -183,16 +184,18 @@ export default function App() {
 
   async function changeOwnPassword(currentPassword, newPassword) {
     if (role === "owner") {
-      if (currentPassword !== config.owner_password) return "Current password is incorrect.";
-      const { error } = await supabase.from("app_config").update({ owner_password: newPassword }).eq("id", 1);
+      if (!(await verifyPassword(currentPassword, config.owner_password))) return "Current password is incorrect.";
+      const newHash = await hashPassword(newPassword);
+      const { error } = await supabase.from("app_config").update({ owner_password: newHash }).eq("id", 1);
       if (error) return "Could not save the new password.";
       ensureConfig();
       return null;
     }
     const mine = staffAccounts.find((s) => s.id === accountId);
     if (!mine) return "Could not find your account.";
-    if (currentPassword !== mine.password) return "Current password is incorrect.";
-    const { error } = await supabase.from("staff_accounts").update({ password: newPassword }).eq("id", accountId);
+    if (!(await verifyPassword(currentPassword, mine.password))) return "Current password is incorrect.";
+    const newHash = await hashPassword(newPassword);
+    const { error } = await supabase.from("staff_accounts").update({ password: newHash }).eq("id", accountId);
     if (error) return "Could not save the new password.";
     loadAll();
     return null;

@@ -1,22 +1,41 @@
 import React, { useState } from "react";
 import { Beaker, Lock } from "lucide-react";
+import { supabase } from "./supabaseClient";
+import { verifyPassword, hashPassword, isHashed } from "./passwordUtils";
 
 export default function Login({ config, staffAccounts, onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
-    if (username === config.owner_username && password === config.owner_password) {
+    if (checking) return;
+    setChecking(true);
+    setError("");
+
+    if (username === config.owner_username && (await verifyPassword(password, config.owner_password))) {
+      if (!isHashed(config.owner_password)) {
+        const newHash = await hashPassword(password);
+        supabase.from("app_config").update({ owner_password: newHash }).eq("id", 1);
+      }
       onLogin("owner", username, null, null);
       return;
     }
-    const staffMatch = (staffAccounts || []).find((s) => s.username === username && s.password === password);
-    if (staffMatch) {
-      onLogin("staff", username, staffMatch.permissions || {}, staffMatch.id);
-      return;
+
+    for (const s of staffAccounts || []) {
+      if (s.username === username && (await verifyPassword(password, s.password))) {
+        if (!isHashed(s.password)) {
+          const newHash = await hashPassword(password);
+          supabase.from("staff_accounts").update({ password: newHash }).eq("id", s.id);
+        }
+        onLogin("staff", username, s.permissions || {}, s.id);
+        return;
+      }
     }
+
+    setChecking(false);
     setError("Incorrect username or password.");
   }
 
@@ -43,8 +62,8 @@ export default function Login({ config, staffAccounts, onLogin }) {
 
         {error && <div style={{ color: "#C1432B", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
 
-        <button type="submit" style={{ marginTop: 18, width: "100%", background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-          <Lock size={14} /> Sign in
+        <button type="submit" disabled={checking} style={{ marginTop: 18, width: "100%", background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: checking ? 0.7 : 1 }}>
+          <Lock size={14} /> {checking ? "Checking…" : "Sign in"}
         </button>
       </form>
       <div style={{ marginTop: 18, fontSize: 12, color: "#8A9694" }}>Made by Abdullah Ahmad</div>
