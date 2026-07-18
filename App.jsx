@@ -1435,7 +1435,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
   const [selectedLotId, setSelectedLotId] = useState("");
   const chosenLot = (selectedLotId && lots.find((l) => l.id === selectedLotId)) || fefo;
   const currentActiveLot = device ? reagents.find((r) => r.name === name && r.device === device && r.active_on_device) : null;
-  const showReplaceChoice = !!(device && chosenLot && currentActiveLot && currentActiveLot.id !== chosenLot.id);
+  const showReplaceChoice = !!(device && chosenLot && currentActiveLot);
   const [replaceOnDevice, setReplaceOnDevice] = useState(true);
 
   const pendingLtl = needsLotToLot(device) ? (lotToLotPending || []).find((p) => p.reagent_name === name && p.device === device && !p.confirmed) : null;
