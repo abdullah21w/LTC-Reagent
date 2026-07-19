@@ -358,7 +358,13 @@ export default function App() {
     if (item) {
       const delta = updated.amount - original.amount;
       const newQty = Math.max(0, item.current_quantity - delta);
-      await supabase.from("reagents").update({ current_quantity: newQty }).eq("id", item.id);
+      const updatePayload = { current_quantity: newQty };
+      if (item.deleted && newQty > 0) {
+        updatePayload.deleted = false;
+        updatePayload.deleted_by = null;
+        updatePayload.deleted_at = null;
+      }
+      await supabase.from("reagents").update(updatePayload).eq("id", item.id);
     }
     await supabase.from("consumption_logs").update({
       amount: updated.amount, date: updated.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
@@ -373,7 +379,18 @@ export default function App() {
     if (!can("delete")) return;
     if (!confirm("Remove this log entry? The amount will be added back to stock, but it stays in Reports for audit purposes.")) return;
     const item = reagents.find((r) => r.id === log.reagent_id);
-    if (item) await supabase.from("reagents").update({ current_quantity: item.current_quantity + log.amount }).eq("id", item.id);
+    if (item) {
+      const restoredQty = item.current_quantity + log.amount;
+      const updatePayload = { current_quantity: restoredQty };
+      // If this lot had been auto-removed for being depleted, bring it back
+      // now that it has stock again.
+      if (item.deleted && restoredQty > 0) {
+        updatePayload.deleted = false;
+        updatePayload.deleted_by = null;
+        updatePayload.deleted_at = null;
+      }
+      await supabase.from("reagents").update(updatePayload).eq("id", item.id);
+    }
     await supabase.from("consumption_logs").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", log.id);
     await logActivity("delete", "log", `${item ? item.name : "Unknown"} — ${log.amount} used by ${log.used_by} on ${log.date}`);
     loadAll();
