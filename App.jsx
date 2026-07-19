@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -234,7 +234,20 @@ export default function App() {
     const item = reagents.find((r) => r.id === entry.reagentId);
     if (!item) return;
     const newQty = Math.max(0, item.current_quantity - entry.amount);
-    await supabase.from("reagents").update({ current_quantity: newQty }).eq("id", item.id);
+
+    const updatePayload = { current_quantity: newQty };
+    if (newQty <= 0) {
+      const hasAlternative = reagents.some((r) => r.id !== item.id && r.name === item.name && (r.device || "") === (item.device || "") && !r.deleted && r.current_quantity > 0);
+      if (hasAlternative) {
+        updatePayload.deleted = true;
+        updatePayload.deleted_by = "Auto (lot depleted, alternate lot available)";
+        updatePayload.deleted_at = new Date().toISOString();
+      }
+    }
+    await supabase.from("reagents").update(updatePayload).eq("id", item.id);
+    if (updatePayload.deleted) {
+      await logActivity("delete", "reagent", `${item.name} — Lot ${item.lot_number} (auto-removed, depleted)`, "System");
+    }
     await supabase.from("consumption_logs").insert({
       reagent_id: entry.reagentId, amount: entry.amount, date: entry.date, used_by: entry.usedBy, note: entry.note, tested_by_qc: entry.testedByQC,
     });
@@ -521,6 +534,7 @@ export default function App() {
           )}
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onRemove={removeFromDevice} />}
+          {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -558,6 +572,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         <SideGroup label="Tracking" />
         {can("reports") && <SideItem active={tab === "reports"} onClick={() => go("reports")} icon={<FileText size={16} />} label="Reports" />}
         {can("dashboard") && <SideItem active={tab === "devices"} onClick={() => go("devices")} icon={<Cpu size={16} />} label="Devices" />}
+        {can("dashboard") && <SideItem active={tab === "history"} onClick={() => go("history")} icon={<Archive size={16} />} label="History" />}
         {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
@@ -599,12 +614,13 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
   reports: "Full inventory and consumption history",
   devices: "What's currently loaded on each device",
+  history: "Search any reagent's full lot and usage history",
   settings: "Manage users, permissions, and defaults",
   charts: "Consumption trends over time",
   deletions: "Full record of edits and deletions",
@@ -1036,6 +1052,137 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
           </Panel>
         );
       })}
+    </div>
+  );
+}
+
+function HistoryPage({ reagents, logs }) {
+  const [search, setSearch] = useState("");
+  const allNames = [...new Set((reagents || []).map((r) => r.name))].sort();
+  const term = search.trim().toLowerCase();
+  const matchedName = allNames.find((n) => n.toLowerCase() === term) || null;
+  const suggestions = term && !matchedName ? allNames.filter((n) => n.toLowerCase().includes(term)).slice(0, 8) : [];
+
+  const lots = matchedName
+    ? reagents.filter((r) => r.name === matchedName).sort(compareLots)
+    : [];
+  const lotIds = new Set(lots.map((l) => l.id));
+  const relatedLogs = matchedName
+    ? (logs || []).filter((l) => lotIds.has(l.reagent_id)).sort((a, b) => new Date(b.date) - new Date(a.date))
+    : [];
+  const lotById = {};
+  lots.forEach((l) => { lotById[l.id] = l; });
+
+  const totalReceived = lots.reduce((s, l) => s + Number(l.quantity_received || 0), 0);
+  const totalRemaining = lots.reduce((s, l) => s + Number(l.current_quantity || 0), 0);
+
+  return (
+    <div>
+      <input
+        list="history-reagent-names"
+        placeholder="Search a reagent name…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ width: "100%", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 18 }}
+      />
+      <datalist id="history-reagent-names">
+        {allNames.map((n) => <option key={n} value={n} />)}
+      </datalist>
+
+      {!matchedName && suggestions.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
+          {suggestions.map((n) => (
+            <button key={n} onClick={() => setSearch(n)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 20, padding: "6px 14px", fontSize: 12.5, color: THEME.text }}>{n}</button>
+          ))}
+        </div>
+      )}
+
+      {!matchedName && !term && <div style={{ fontSize: 13.5, color: THEME.textMuted, padding: "20px 0" }}>Start typing a reagent name to see its full lot and usage history — including lots that already ran out.</div>}
+      {!matchedName && term && suggestions.length === 0 && <div style={{ fontSize: 13.5, color: THEME.textMuted, padding: "20px 0" }}>No reagent matches "{search}".</div>}
+
+      {matchedName && (
+        <>
+          <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+            <StatCardV2 icon={<Archive size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={lots.length} label="Total lots ever received" />
+            <StatCardV2 icon={<Beaker size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={totalRemaining} label="Currently remaining (all lots)" />
+            <StatCardV2 icon={<TrendingDown size={20} />} iconBg="#FFF7ED" iconColor="#EA580C" value={totalReceived} label="Total ever received" />
+          </div>
+
+          <Panel title={`${matchedName} — Lots (${lots.length})`}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Lot</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Received</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Expiry</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600, textAlign: "right" }}>Received qty</th>
+                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600, textAlign: "right" }}>Remaining</th>
+                    <th style={{ padding: "0 0 8px 0", fontWeight: 600 }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lots.map((l) => (
+                    <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}`, opacity: l.deleted ? 0.65 : 1 }}>
+                      <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{l.lot_number}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.device || "—"}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.date_added}</td>
+                      <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.expiry_date || "No expiry"}</td>
+                      <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.text }}>{l.quantity_received} {l.unit}</td>
+                      <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.current_quantity} {l.unit}</td>
+                      <td style={{ padding: "9px 0" }}>
+                        {l.deleted ? (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", borderRadius: 5, padding: "2px 7px" }}>
+                            {l.current_quantity <= 0 ? "Depleted" : "Removed"}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2F6B4F", background: "#E8F2EC", borderRadius: 5, padding: "2px 7px" }}>Active</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+
+          <div style={{ height: 16 }} />
+
+          <Panel title={`Usage history (${relatedLogs.length})`}>
+            {relatedLogs.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged for this reagent yet.</div>}
+            {relatedLogs.length > 0 && (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                      <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Date</th>
+                      <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Lot</th>
+                      <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
+                      <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Used by</th>
+                      <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {relatedLogs.map((l) => {
+                      const lot = lotById[l.reagent_id];
+                      return (
+                        <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}`, opacity: l.deleted ? 0.6 : 1 }}>
+                          <td style={{ padding: "9px 8px 9px 0", color: THEME.textMuted }}>{l.date}</td>
+                          <td style={{ padding: "9px 8px", color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{lot ? lot.lot_number : "—"}</td>
+                          <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{lot ? lot.device || "—" : "—"}</td>
+                          <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.used_by}</td>
+                          <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.amount} {lot ? lot.unit : ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
     </div>
   );
 }
