@@ -147,8 +147,8 @@ export default function App() {
     setLotToLotPending(ltl || []);
   }
 
-  async function logActivity(action, entity, description) {
-    await supabase.from("audit_log").insert({ action, entity, description, performed_by: username });
+  async function logActivity(action, entity, description, performedBy) {
+    await supabase.from("audit_log").insert({ action, entity, description, performed_by: performedBy || username });
   }
 
   useEffect(() => {
@@ -167,6 +167,7 @@ export default function App() {
     setUsername(newUsername);
     setPerms(effectivePerms);
     setAccountId(newAccountId || null);
+    logActivity("login", "user", `${newUsername} (${newRole === "owner" ? "Owner" : "Staff"}) signed in`, newUsername);
     const order = ["dashboard", "reports", "charts", "settings"];
     const firstTab = order.find((t) => newRole === "owner" || effectivePerms[t]) || "dashboard";
     setTab(firstTab);
@@ -1366,6 +1367,7 @@ function DeletionsLog({ activityLog, onClear }) {
     edit: { label: "Edited", color: "#B8860B", bg: "#FBF3DF" },
     delete: { label: "Removed", color: "#C1432B", bg: "#FBEAE6" },
     purge: { label: "Erased permanently", color: "#8A2E1F", bg: "#FBEAE6" },
+    login: { label: "Signed in", color: "#0F7173", bg: "#EAF6F4" },
   };
 
   return (
@@ -1378,18 +1380,19 @@ function DeletionsLog({ activityLog, onClear }) {
           </button>
         )}
       </div>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 24 }}>Every edit, removal, and permanent erase — in order, newest first. Only visible to your account.</div>
+      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 24 }}>Every login, edit, removal, and permanent erase — in order, newest first. Only visible to your account.</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {activityLog.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No activity recorded yet.</div>}
         {activityLog.map((e) => {
           const m = ACTION_META[e.action] || { label: e.action, color: "#516361", bg: "#F0F3F2" };
+          const entityLabel = e.entity === "reagent" ? "Reagent lot" : e.entity === "user" ? "Login" : "Usage log";
           return (
             <div key={e.id} style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
               <span style={{ fontSize: 10.5, fontWeight: 700, color: m.color, background: m.bg, padding: "3px 8px", borderRadius: 4, textTransform: "uppercase", flexShrink: 0 }}>{m.label}</span>
               <div style={{ flex: 1, fontSize: 13 }}>
                 <div style={{ fontWeight: 600 }}>{e.description}</div>
-                <div style={{ fontSize: 11.5, color: "#8A9694", marginTop: 2 }}>{e.entity === "reagent" ? "Reagent lot" : "Usage log"} · by <b>{e.performed_by}</b> on {fmtDateTime(e.performed_at)}</div>
+                <div style={{ fontSize: 11.5, color: "#8A9694", marginTop: 2 }}>{entityLabel} · by <b>{e.performed_by}</b> on {fmtDateTime(e.performed_at)}</div>
               </div>
             </div>
           );
