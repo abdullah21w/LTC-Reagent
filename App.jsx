@@ -584,7 +584,7 @@ export default function App() {
               onEditLog={setEditLog} onDeleteLog={deleteLog}
             />
           )}
-          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
@@ -1366,7 +1366,7 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog }) {
+function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
   const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -1501,6 +1501,9 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
                       {r.deleted && role === "owner" && (
                         <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
                       )}
+                      {!r.deleted && can("delete") && (
+                        <button onClick={() => onDeleteReagent(r.id)} title="Remove this lot" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
+                      )}
                     </div>
                     <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · {r.item_type} · Lot {r.lot_number}</div>
                   </div>
@@ -1555,6 +1558,9 @@ function Reports({ reagents, logs, departments, role, onPurgeReagent, onPurgeLog
                       {l.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {l.deleted_by} · {fmtDateTime(l.deleted_at)}</span>}
                       {l.deleted && role === "owner" && (
                         <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+                      )}
+                      {!l.deleted && can("delete") && (
+                        <button onClick={() => onDeleteLog(l)} title="Undo this log entry" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
                       )}
                     </div>
                     <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r ? `${r.department} · Lot ${r.lot_number}${r.device ? ` · ${r.device}` : ""}` : ""}</div>
