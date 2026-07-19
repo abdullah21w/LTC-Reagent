@@ -317,6 +317,41 @@ export default function App() {
     loadAll();
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAINTENANCE (Owner only, triggered manually from Settings → "Run maintenance")
+  // Applies fixed/updated rules retroactively to existing data that was created
+  // before the rule existed. Add a new numbered step here each time a change
+  // needs to be backfilled onto old records — this is the one place to check
+  // when starting a new conversation about "apply this to existing data too".
+  // ─────────────────────────────────────────────────────────────────────────
+  async function runMaintenance() {
+    if (role !== "owner") return { ok: false, message: "Only the owner can run maintenance." };
+    let depletedRemoved = 0;
+
+    // Step 1: auto-remove depleted lots (qty <= 0) that already have an
+    // alternate lot (same name + device) covering them. Matches the rule
+    // applied automatically to new "Log use" entries going forward.
+    const active = reagents.filter((r) => !r.deleted);
+    for (const item of active) {
+      if (item.current_quantity > 0) continue;
+      const hasAlternative = active.some((r) => r.id !== item.id && r.name === item.name && (r.device || "") === (item.device || "") && r.current_quantity > 0);
+      if (hasAlternative) {
+        await supabase.from("reagents").update({
+          deleted: true,
+          deleted_by: "Maintenance (lot depleted, alternate lot available)",
+          deleted_at: new Date().toISOString(),
+        }).eq("id", item.id);
+        depletedRemoved++;
+      }
+    }
+    if (depletedRemoved > 0) {
+      await logActivity("delete", "reagent", `Maintenance: auto-removed ${depletedRemoved} depleted lot(s) with an alternate lot available`, "System");
+    }
+
+    loadAll();
+    return { ok: true, message: `Maintenance complete. ${depletedRemoved} depleted lot(s) removed.` };
+  }
+
   async function saveEditedLog(updated, original) {
     if (!can("edit")) return;
     const item = reagents.find((r) => r.id === original.reagent_id);
@@ -535,7 +570,7 @@ export default function App() {
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
-          {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} />}
+          {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
         </main>
@@ -1058,18 +1093,26 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
 
 function HistoryPage({ reagents, logs }) {
   const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const allNames = [...new Set((reagents || []).map((r) => r.name))].sort();
   const term = search.trim().toLowerCase();
   const matchedName = allNames.find((n) => n.toLowerCase() === term) || null;
   const suggestions = term && !matchedName ? allNames.filter((n) => n.toLowerCase().includes(term)).slice(0, 8) : [];
 
-  const lots = matchedName
+  let lots = matchedName
     ? reagents.filter((r) => r.name === matchedName).sort(compareLots)
     : [];
+  if (dateFrom) lots = lots.filter((l) => l.date_added >= dateFrom);
+  if (dateTo) lots = lots.filter((l) => l.date_added <= dateTo);
+
   const lotIds = new Set(lots.map((l) => l.id));
-  const relatedLogs = matchedName
+  let relatedLogs = matchedName
     ? (logs || []).filter((l) => lotIds.has(l.reagent_id)).sort((a, b) => new Date(b.date) - new Date(a.date))
     : [];
+  if (dateFrom) relatedLogs = relatedLogs.filter((l) => l.date >= dateFrom);
+  if (dateTo) relatedLogs = relatedLogs.filter((l) => l.date <= dateTo);
+
   const lotById = {};
   lots.forEach((l) => { lotById[l.id] = l; });
 
@@ -1083,11 +1126,24 @@ function HistoryPage({ reagents, logs }) {
         placeholder="Search a reagent name…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        style={{ width: "100%", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 18 }}
+        style={{ width: "100%", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 12 }}
       />
       <datalist id="history-reagent-names">
         {allNames.map((n) => <option key={n} value={n} />)}
       </datalist>
+
+      {matchedName && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: THEME.textMuted }}>From</span>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "7px 10px", fontSize: 13, background: THEME.cardBg, color: THEME.text }} />
+          <span style={{ fontSize: 12, color: THEME.textMuted }}>To</span>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "7px 10px", fontSize: 13, background: THEME.cardBg, color: THEME.text }} />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ fontSize: 12, color: THEME.primary, background: "none", border: "none", fontWeight: 600 }}>Clear dates</button>
+          )}
+          <span style={{ fontSize: 11.5, color: THEME.textMuted }}>Filters lots by received date, and usage by log date.</span>
+        </div>
+      )}
 
       {!matchedName && suggestions.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>

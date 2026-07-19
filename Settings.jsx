@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Trash2, Plus, Save } from "lucide-react";
+import { Trash2, Plus, Save, RefreshCw } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { hashPassword } from "./passwordUtils";
 
@@ -64,7 +64,7 @@ function StaffAccountRow({ account, onSave, onRemove }) {
   );
 }
 
-export default function Settings({ config, presets, role, staffAccounts, devices, reload }) {
+export default function Settings({ config, presets, role, staffAccounts, devices, reload, onRunMaintenance }) {
   const departments = config.departments || [];
   const [newPreset, setNewPreset] = useState({ name: "", department: departments[0] || "", unit: "mL" });
   const [newDept, setNewDept] = useState("");
@@ -84,6 +84,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
   const [newAlertDay, setNewAlertDay] = useState("");
   const [msg, setMsg] = useState("");
+  const [maintMsg, setMaintMsg] = useState("");
 
   function addAlertDay() {
     const n = Number(newAlertDay);
@@ -398,6 +399,25 @@ export default function Settings({ config, presets, role, staffAccounts, devices
               <Save size={14} /> Save backup settings
             </button>
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3, marginTop: 30 }}>MAINTENANCE</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            Applies newer rules to data that already existed before those rules were added — for example, removing old depleted lots that have an alternate lot available, the same way new "Log use" entries handle it automatically now. Safe to run anytime; it only touches records that already match a rule.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+            <button
+              onClick={async () => {
+                setMaintMsg("Running…");
+                const result = await onRunMaintenance();
+                setMaintMsg(result.message);
+                setTimeout(() => setMaintMsg(""), 8000);
+              }}
+              style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+            >
+              <RefreshCw size={14} /> Run maintenance
+            </button>
+            {maintMsg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{maintMsg}</div>}
           </div>
         </>
       )}
