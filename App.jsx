@@ -248,8 +248,19 @@ export default function App() {
     if (updatePayload.deleted) {
       await logActivity("delete", "reagent", `${item.name} — Lot ${item.lot_number} (auto-removed, depleted)`, "System");
     }
+    let activeDeviceChanged = false;
+    let previousActiveLotId = null;
+    if (item.device && !item.active_on_device) {
+      activeDeviceChanged = true;
+      if (entry.replaceOnDevice) {
+        const prevActive = reagents.find((r) => r.id !== item.id && r.name === item.name && r.device === item.device && !r.deleted && r.active_on_device);
+        previousActiveLotId = prevActive ? prevActive.id : null;
+      }
+    }
+
     await supabase.from("consumption_logs").insert({
       reagent_id: entry.reagentId, amount: entry.amount, date: entry.date, used_by: entry.usedBy, note: entry.note, tested_by_qc: entry.testedByQC,
+      active_device_changed: activeDeviceChanged, previous_active_lot_id: previousActiveLotId,
     });
     if (item.device) {
       if (entry.replaceOnDevice) {
@@ -389,7 +400,15 @@ export default function App() {
         updatePayload.deleted_by = null;
         updatePayload.deleted_at = null;
       }
+      // If this log entry had promoted this lot to "active on device", undo
+      // that too — demote it back, and restore whichever lot was active before.
+      if (log.active_device_changed) {
+        updatePayload.active_on_device = false;
+      }
       await supabase.from("reagents").update(updatePayload).eq("id", item.id);
+      if (log.active_device_changed && log.previous_active_lot_id) {
+        await supabase.from("reagents").update({ active_on_device: true }).eq("id", log.previous_active_lot_id);
+      }
     }
     await supabase.from("consumption_logs").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", log.id);
     await logActivity("delete", "log", `${item ? item.name : "Unknown"} — ${log.amount} used by ${log.used_by} on ${log.date}`);

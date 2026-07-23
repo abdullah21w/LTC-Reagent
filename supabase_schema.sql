@@ -41,6 +41,8 @@ create table if not exists consumption_logs (
   used_by text not null,
   note text,
   tested_by_qc boolean not null default false,
+  active_device_changed boolean not null default false,
+  previous_active_lot_id uuid,
   deleted boolean not null default false,
   deleted_by text,
   deleted_at timestamptz,
