@@ -67,7 +67,7 @@ function compareLots(a, b) {
 function formatCartonQty(qty, unitsPerCarton, unit) {
   if (!unitsPerCarton || unitsPerCarton <= 0) return { main: `${qty} ${unit}`, sub: null };
   const cartons = Math.floor(qty / unitsPerCarton);
-  return { main: `${cartons} carton${cartons === 1 ? "" : "s"}`, sub: `${qty} ${unit} remaining` };
+  return { main: `${cartons} box${cartons === 1 ? "" : "es"}`, sub: `${qty} ${unit} remaining` };
 }
 
 const LOT_TO_LOT_DEVICES = ["vitros"];
@@ -1888,7 +1888,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>{chosenLot?.units_per_carton ? `Boxes used (of ${chosenLot.units_per_carton}/carton)` : `Amount used (${chosenLot?.unit || "unit"})`}<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>{chosenLot?.units_per_carton ? `Units used (of ${chosenLot.units_per_carton}/box)` : `Amount used (${chosenLot?.unit || "unit"})`}<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
         <label style={labelStyle}>Used by
@@ -1938,10 +1938,10 @@ function EditReagentModal({ reagent, onClose, onSave }) {
 
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
           <input type="checkbox" checked={packagingEnabled} onChange={(e) => setPackagingEnabled(e.target.checked)} />
-          This item comes in cartons containing multiple {form.unit || "units"}
+          This item comes in boxes containing multiple {form.unit || "units"}
         </label>
         {packagingEnabled && (
-          <label style={labelStyle}>{form.unit || "Units"} per carton<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+          <label style={labelStyle}>{form.unit || "Units"} per box<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
         )}
         {packagingEnabled && !wasPackaged && unitsPerCarton && (
           <div style={{ fontSize: 11.5, color: "#0F7173" }}>

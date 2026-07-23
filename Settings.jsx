@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Trash2, Plus, Save, RefreshCw } from "lucide-react";
+import { Trash2, Plus, Save, RefreshCw, Pencil } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { hashPassword } from "./passwordUtils";
 
@@ -68,6 +68,8 @@ function StaffAccountRow({ account, onSave, onRemove }) {
 export default function Settings({ config, presets, role, staffAccounts, devices, reload, onRunMaintenance }) {
   const departments = config.departments || [];
   const [newPreset, setNewPreset] = useState({ name: "", department: departments[0] || "", unit: "mL" });
+  const [editPresetId, setEditPresetId] = useState(null);
+  const [editPresetForm, setEditPresetForm] = useState({ name: "", department: "", unit: "" });
   const [newDept, setNewDept] = useState("");
   const [newDevice, setNewDevice] = useState({ name: "", department: departments[0] || "" });
   const [newStaff, setNewStaff] = useState({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
@@ -145,6 +147,18 @@ export default function Settings({ config, presets, role, staffAccounts, devices
 
   async function deletePreset(id) {
     await supabase.from("reagent_presets").delete().eq("id", id);
+    reload();
+  }
+
+  function startEditPreset(p) {
+    setEditPresetId(p.id);
+    setEditPresetForm({ name: p.name, department: p.department, unit: p.unit });
+  }
+
+  async function saveEditPreset() {
+    if (!editPresetForm.name) return;
+    await supabase.from("reagent_presets").update(editPresetForm).eq("id", editPresetId);
+    setEditPresetId(null);
     reload();
   }
 
@@ -234,11 +248,37 @@ export default function Settings({ config, presets, role, staffAccounts, devices
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 30 }}>
         {presets.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No presets yet — add your first reagent name above.</div>}
         {presets.map((p) => (
-          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "9px 14px" }}>
-            <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
-            <div style={{ fontSize: 12.5, color: "#7B8E8A" }}>{p.department} · {p.unit}</div>
-            <button onClick={() => deletePreset(p.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={15} /></button>
-          </div>
+          editPresetId === p.id ? (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", border: "1px solid #0F7173", borderRadius: 8, padding: "9px 14px", flexWrap: "wrap" }}>
+              <input
+                value={editPresetForm.name}
+                onChange={(e) => setEditPresetForm((f) => ({ ...f, name: e.target.value }))}
+                style={{ ...inputStyle, flex: 2, minWidth: 140, marginTop: 0 }}
+              />
+              <select
+                value={editPresetForm.department}
+                onChange={(e) => setEditPresetForm((f) => ({ ...f, department: e.target.value }))}
+                style={{ ...inputStyle, flex: 1, minWidth: 120, marginTop: 0 }}
+              >
+                {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <input
+                placeholder="Unit"
+                value={editPresetForm.unit}
+                onChange={(e) => setEditPresetForm((f) => ({ ...f, unit: e.target.value }))}
+                style={{ ...inputStyle, width: 80, marginTop: 0 }}
+              />
+              <button onClick={saveEditPreset} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "0 12px", fontWeight: 700, fontSize: 13, height: 38 }}>Save</button>
+              <button onClick={() => setEditPresetId(null)} style={{ background: "none", border: "1px solid #C7D1CE", color: "#516361", borderRadius: 7, padding: "0 12px", fontSize: 13, height: 38 }}>Cancel</button>
+            </div>
+          ) : (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "9px 14px" }}>
+              <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
+              <div style={{ fontSize: 12.5, color: "#7B8E8A" }}>{p.department} · {p.unit}</div>
+              <button onClick={() => startEditPreset(p)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={15} /></button>
+              <button onClick={() => deletePreset(p.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={15} /></button>
+            </div>
+          )
         ))}
       </div>
 

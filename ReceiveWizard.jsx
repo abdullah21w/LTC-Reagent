@@ -113,13 +113,13 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
 
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
               <input type="checkbox" checked={usePackaging} onChange={(e) => setUsePackaging(e.target.checked)} />
-              This item comes in cartons containing multiple {form.unit || "units"}
+              This item comes in boxes containing multiple {form.unit || "units"}
             </label>
 
             {usePackaging ? (
               <div style={{ display: "flex", gap: 10 }}>
-                <label style={{ ...labelStyle, flex: 1 }}>{form.unit || "Units"} per carton<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
-                <label style={{ ...labelStyle, flex: 1 }}>Cartons received<input type="number" style={inputStyle} value={cartonsReceived} onChange={(e) => setCartonsReceived(e.target.value)} /></label>
+                <label style={{ ...labelStyle, flex: 1 }}>{form.unit || "Units"} per box<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+                <label style={{ ...labelStyle, flex: 1 }}>Boxes received<input type="number" style={inputStyle} value={cartonsReceived} onChange={(e) => setCartonsReceived(e.target.value)} /></label>
               </div>
             ) : (
               <label style={labelStyle}>Quantity received<input type="number" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
