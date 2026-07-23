@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -76,7 +76,7 @@ const STATUS_META = {
   expiring: { label: "Expiring soon", color: "#8A5A2B", bg: "#FBF0E4" },
 };
 
-const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true };
+const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true, discard: true };
 const DEFAULT_NEW_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
 
 export default function App() {
@@ -110,6 +110,7 @@ export default function App() {
   }
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [editReagent, setEditReagent] = useState(null);
+  const [discardReagentTarget, setDiscardReagentTarget] = useState(null);
   const [editLog, setEditLog] = useState(null);
   const [error, setError] = useState("");
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -319,6 +320,18 @@ export default function App() {
     const item = reagents.find((r) => r.id === id);
     await supabase.from("reagents").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", id);
     await logActivity("delete", "reagent", item ? `${item.name} — Lot ${item.lot_number}` : id);
+    loadAll();
+  }
+
+  async function discardReagent(id, reason, note) {
+    if (!can("discard")) return;
+    const item = reagents.find((r) => r.id === id);
+    await supabase.from("reagents").update({
+      deleted: true, deleted_by: username, deleted_at: new Date().toISOString(),
+      discard_reason: reason, discard_note: note || null,
+    }).eq("id", id);
+    await logActivity("discard", "reagent", item ? `${item.name} — Lot ${item.lot_number} (${reason})` : id);
+    setDiscardReagentTarget(null);
     loadAll();
   }
 
@@ -590,7 +603,7 @@ export default function App() {
             </div>
           )}
 
-          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
+          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
             <DetailView
               group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
@@ -599,12 +612,12 @@ export default function App() {
               can={can}
               warnDays={warnDays}
               onBack={() => setTab("dashboard")}
-              onEditReagent={setEditReagent} onDeleteReagent={deleteReagent}
+              onEditReagent={setEditReagent} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget}
               onEditLog={setEditLog} onDeleteLog={deleteLog}
             />
           )}
-          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
-          {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onRemove={removeFromDevice} />}
+          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onDiscard={setDiscardReagentTarget} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
@@ -615,6 +628,7 @@ export default function App() {
       {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
+      {discardReagentTarget && <DiscardModal reagent={discardReagentTarget} onClose={() => setDiscardReagentTarget(null)} onDiscard={discardReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
       {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#DC2626", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
@@ -769,7 +783,7 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onSelect, onViewDevices }) {
+function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onDiscardReagent, onSelect, onViewDevices }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
   const [deviceFilter, setDeviceFilter] = useState("all");
@@ -1031,6 +1045,15 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                     <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
                     {g.fefo.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, opacity: 0.75, marginTop: 1 }}>{g.fefo.expiry_date}</div>}
                   </div>
+                  {can("discard") && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDiscardReagent(g.fefo); }}
+                      title="Discard (expired/damaged)"
+                      style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}
+                    >
+                      <Ban size={15} />
+                    </button>
+                  )}
                   {can("delete") && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }}
@@ -1072,7 +1095,7 @@ function DeptPill({ active, onClick, label, color }) {
   );
 }
 
-function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRemove }) {
+function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onDiscard, onRemove }) {
   const active = (reagents || []).filter((r) => !r.deleted);
 
   if (!devices || devices.length === 0) {
@@ -1114,6 +1137,7 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onRe
                         </button>
                       )}
                       {can("edit") && <button onClick={() => onEdit(r)} title="Edit this lot" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4 }}><Pencil size={14} /></button>}
+                      {can("discard") && <button onClick={() => onDiscard(r)} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}><Ban size={14} /></button>}
                       {can("delete") && <button onClick={() => onDelete(r.id)} title="Delete this lot" style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}><Trash2 size={14} /></button>}
                     </div>
                   </div>
@@ -1279,7 +1303,7 @@ function HistoryPage({ reagents, logs }) {
   );
 }
 
-function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onEditLog, onDeleteLog }) {
+function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog }) {
   const last30 = logs.filter((l) => daysBetween(todayISO(), l.date) <= 30);
   const consumed30 = last30.reduce((s, l) => s + l.amount, 0);
   const avgDaily = consumed30 / 30;
@@ -1336,6 +1360,7 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
                   {it.expiry_date && <div style={{ fontSize: 10.5, color: "#8A9694", marginTop: 1 }}>{it.expiry_date}</div>}
                 </div>
                 {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
+                {can("discard") && <button onClick={() => onDiscardReagent(it)} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: "#C1432B" }}><Ban size={14} /></button>}
                 {can("delete") && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
               </div>
               {failedItems.length > 0 && (
@@ -1385,7 +1410,7 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
+function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDiscardReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
   const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -1516,9 +1541,19 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDe
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
                       {r.name}
-                      {r.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>}
+                      {r.deleted && role === "owner" && r.discard_reason && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", padding: "2px 7px", borderRadius: 4 }}>
+                          DISCARDED — {r.discard_reason}{r.discard_note ? `: ${r.discard_note}` : ""} · by {r.deleted_by} · {fmtDateTime(r.deleted_at)}
+                        </span>
+                      )}
+                      {r.deleted && !(role === "owner" && r.discard_reason) && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>
+                      )}
                       {r.deleted && role === "owner" && (
                         <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+                      )}
+                      {!r.deleted && can("discard") && (
+                        <button onClick={() => onDiscardReagent(r)} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Ban size={14} /></button>
                       )}
                       {!r.deleted && can("delete") && (
                         <button onClick={() => onDeleteReagent(r.id)} title="Remove this lot" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
@@ -1611,6 +1646,7 @@ function DeletionsLog({ activityLog, onClear }) {
   const ACTION_META = {
     edit: { label: "Edited", color: "#B8860B", bg: "#FBF3DF" },
     delete: { label: "Removed", color: "#C1432B", bg: "#FBEAE6" },
+    discard: { label: "Discarded", color: "#8A5A2B", bg: "#FBF0E4" },
     purge: { label: "Erased permanently", color: "#8A2E1F", bg: "#FBEAE6" },
     login: { label: "Signed in", color: "#0F7173", bg: "#EAF6F4" },
   };
@@ -1832,6 +1868,38 @@ function EditReagentModal({ reagent, onClose, onSave }) {
           onClick={() => onSave({ ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) })}
           style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}
         >Save changes</button>
+      </div>
+    </Modal>
+  );
+}
+
+const DISCARD_REASONS = ["Expired", "Damaged", "Contaminated", "Other"];
+
+function DiscardModal({ reagent, onClose, onDiscard }) {
+  const [reason, setReason] = useState(DISCARD_REASONS[0]);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit() {
+    setSaving(true);
+    await onDiscard(reagent.id, reason, note);
+    setSaving(false);
+  }
+
+  return (
+    <Modal title={`Discard Lot ${reagent.lot_number}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 13, color: "#516361" }}>{reagent.name} — {reagent.current_quantity} {reagent.unit} remaining</div>
+        <label style={labelStyle}>Reason
+          <select style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
+            {DISCARD_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. found leaking on shelf" /></label>
+        <div style={{ fontSize: 11.5, color: "#8A9694" }}>This removes the lot from active inventory, same as delete — but the reason is recorded and only visible to the owner in Reports.</div>
+        <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#C1432B", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>
+          {saving ? "Discarding…" : "Discard this lot"}
+        </button>
       </div>
     </Modal>
   );

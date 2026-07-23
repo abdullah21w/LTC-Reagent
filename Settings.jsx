@@ -12,9 +12,10 @@ const PERMISSION_FIELDS = [
   { key: "log_use", label: "Log use" },
   { key: "edit", label: "Edit entries" },
   { key: "delete", label: "Delete entries" },
+  { key: "discard", label: "Discard (expired/damaged)" },
 ];
 
-const BLANK_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
+const BLANK_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false, discard: false };
 
 function PermissionGrid({ value, onToggle }) {
   return (

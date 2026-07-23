@@ -28,6 +28,8 @@ create table if not exists reagents (
   deleted boolean not null default false,
   deleted_by text,
   deleted_at timestamptz,
+  discard_reason text,
+  discard_note text,
   edited_by text,
   edited_at timestamptz,
   created_at timestamptz default now()
