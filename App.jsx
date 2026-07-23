@@ -616,7 +616,7 @@ export default function App() {
               onEditLog={setEditLog} onDeleteLog={deleteLog}
             />
           )}
-          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onDiscard={setDiscardReagentTarget} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
@@ -1410,7 +1410,7 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDiscardReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
+function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
   const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -1441,6 +1441,21 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDi
       .filter((l) => (deptFilter ? reagentById[l.reagent_id]?.department === deptFilter : true))
       .sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [logs, reagents, searchLot, dateFrom, dateTo, deptFilter]);
+
+  const matchedDiscards = useMemo(() => {
+    const term = searchLot.trim().toLowerCase();
+    return reagents
+      .filter((r) => !!r.discard_reason)
+      .filter((r) => {
+        const day = (r.deleted_at || "").slice(0, 10);
+        if (term) return r.lot_number.toLowerCase().includes(term) || r.name.toLowerCase().includes(term);
+        return day >= dateFrom && day <= dateTo;
+      })
+      .filter((r) => (deptFilter ? r.department === deptFilter : true))
+      .sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+  }, [reagents, searchLot, dateFrom, dateTo, deptFilter]);
+
+  const logUseCount = matchedLogs.length + matchedDiscards.length;
 
   function logsFor(reagentId) {
     return logs.filter((l) => l.reagent_id === reagentId);
@@ -1503,7 +1518,7 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDi
           onClick={() => setViewTab("logs")}
           style={{ background: viewTab === "logs" ? "#0F7173" : "#fff", color: viewTab === "logs" ? "#fff" : "#516361", border: "1px solid #E1E8E5", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700 }}
         >
-          Log use ({matchedLogs.length})
+          Log use ({logUseCount})
         </button>
       </div>
 
@@ -1541,19 +1556,9 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDi
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
                       {r.name}
-                      {r.deleted && role === "owner" && r.discard_reason && (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", padding: "2px 7px", borderRadius: 4 }}>
-                          DISCARDED — {r.discard_reason}{r.discard_note ? `: ${r.discard_note}` : ""} · by {r.deleted_by} · {fmtDateTime(r.deleted_at)}
-                        </span>
-                      )}
-                      {r.deleted && !(role === "owner" && r.discard_reason) && (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>
-                      )}
+                      {r.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>}
                       {r.deleted && role === "owner" && (
                         <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
-                      )}
-                      {!r.deleted && can("discard") && (
-                        <button onClick={() => onDiscardReagent(r)} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Ban size={14} /></button>
                       )}
                       {!r.deleted && can("delete") && (
                         <button onClick={() => onDeleteReagent(r.id)} title="Remove this lot" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
@@ -1598,7 +1603,7 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDi
 
       {viewTab === "logs" && (
         <>
-          {matchedLogs.length === 0 && (
+          {logUseCount === 0 && (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#8A9694", fontSize: 13.5 }}>No records match this filter.</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1635,6 +1640,27 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDi
                 </div>
               );
             })}
+            {matchedDiscards.map((r) => (
+              <div key={"discard-" + r.id} style={{ background: "#fff", border: "1px solid #FBD5B5", borderRadius: 10, padding: 16, opacity: 0.9 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                    {r.name}
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", padding: "2px 7px", borderRadius: 4 }}>DISCARD</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · Lot {r.lot_number}{r.device ? ` · ${r.device}` : ""}</div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, fontSize: 12.5 }}>
+                  <div><div style={{ color: "#8A5A2B", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Discarded by</div>{r.deleted_by}</div>
+                  <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{fmtDateTime(r.deleted_at)}</div>
+                  {role === "owner" && (
+                    <div style={{ gridColumn: "span 2" }}>
+                      <div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Reason (owner only)</div>
+                      {r.discard_reason}{r.discard_note ? `: ${r.discard_note}` : ""}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}
