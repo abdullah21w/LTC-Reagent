@@ -314,6 +314,7 @@ export default function App() {
     if (!can("edit")) return;
     await supabase.from("reagents").update({
       lot_number: updated.lot_number,
+      unit: updated.unit,
       quantity_received: updated.quantity_received,
       current_quantity: updated.current_quantity,
       expiry_date: updated.expiry_date || null,
@@ -1931,6 +1932,7 @@ function EditReagentModal({ reagent, onClose, onSave }) {
     <Modal title={`Edit lot ${reagent.lot_number}`} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <label style={labelStyle}>Lot number<input style={inputStyle} value={form.lot_number} onChange={set("lot_number")} /></label>
+        <label style={labelStyle}>Unit<input style={inputStyle} value={form.unit} onChange={set("unit")} /></label>
         <div style={{ display: "flex", gap: 10 }}>
           <label style={{ ...labelStyle, flex: 1 }}>Quantity received{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Current quantity{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} /></label>
