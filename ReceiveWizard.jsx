@@ -30,6 +30,9 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
     receivingNotes: "",
     inspectionNotes: "",
   });
+  const [usePackaging, setUsePackaging] = useState(false);
+  const [unitsPerCarton, setUnitsPerCarton] = useState("");
+  const [cartonsReceived, setCartonsReceived] = useState("");
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -46,12 +49,15 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
 
   const devicesForDept = (devices || []).filter((d) => d.department === form.department);
 
-  const step1Valid = form.name && form.lotNumber && form.quantityReceived && form.receivedBy && form.receivedDate;
+  const packagingValid = !usePackaging || (unitsPerCarton && cartonsReceived);
+  const step1Valid = form.name && form.lotNumber && (usePackaging ? packagingValid : form.quantityReceived) && form.receivedBy && form.receivedDate;
 
   function finish() {
+    const finalQty = usePackaging ? Number(unitsPerCarton) * Number(cartonsReceived) : Number(form.quantityReceived);
     onSubmit({
       ...form,
-      quantityReceived: Number(form.quantityReceived),
+      quantityReceived: finalQty,
+      unitsPerCarton: usePackaging ? Number(unitsPerCarton) : null,
       lowStockThreshold: Number(form.lowStockThreshold) || Number(defaultLowStock) || 5,
     });
   }
@@ -104,8 +110,25 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
               <label style={{ ...labelStyle, width: 80 }}>Unit<input style={inputStyle} value={form.unit} onChange={set("unit")} /></label>
             </div>
             <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiryDate} onChange={set("expiryDate")} /></label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+              <input type="checkbox" checked={usePackaging} onChange={(e) => setUsePackaging(e.target.checked)} />
+              This item comes in cartons containing multiple {form.unit || "units"}
+            </label>
+
+            {usePackaging ? (
+              <div style={{ display: "flex", gap: 10 }}>
+                <label style={{ ...labelStyle, flex: 1 }}>{form.unit || "Units"} per carton<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+                <label style={{ ...labelStyle, flex: 1 }}>Cartons received<input type="number" style={inputStyle} value={cartonsReceived} onChange={(e) => setCartonsReceived(e.target.value)} /></label>
+              </div>
+            ) : (
+              <label style={labelStyle}>Quantity received<input type="number" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
+            )}
+            {usePackaging && unitsPerCarton && cartonsReceived && (
+              <div style={{ fontSize: 11.5, color: "#0F7173" }}>= {Number(unitsPerCarton) * Number(cartonsReceived)} {form.unit} total</div>
+            )}
+
             <div style={{ display: "flex", gap: 10 }}>
-              <label style={{ ...labelStyle, flex: 1 }}>Quantity received<input type="number" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
               <label style={{ ...labelStyle, flex: 1 }}>Low stock alert below<input type="number" style={inputStyle} value={form.lowStockThreshold} onChange={set("lowStockThreshold")} placeholder={`default: ${defaultLowStock || 5}`} /></label>
             </div>
             <label style={labelStyle}>Notes (optional)

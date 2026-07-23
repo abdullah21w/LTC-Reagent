@@ -59,6 +59,17 @@ function compareLots(a, b) {
   return new Date(a.date_added) - new Date(b.date_added);
 }
 
+// When a lot has carton packaging enabled, current_quantity/quantity_received
+// are stored in boxes (the fine-grained unit actually decremented by Log use).
+// This turns that raw box count into a { main, sub } display: cartons as the
+// headline number, total boxes remaining as the smaller supporting text.
+// Lots without packaging return { main: "<qty> <unit>", sub: null } unchanged.
+function formatCartonQty(qty, unitsPerCarton, unit) {
+  if (!unitsPerCarton || unitsPerCarton <= 0) return { main: `${qty} ${unit}`, sub: null };
+  const cartons = Math.floor(qty / unitsPerCarton);
+  return { main: `${cartons} carton${cartons === 1 ? "" : "s"}`, sub: `${qty} ${unit} remaining` };
+}
+
 const LOT_TO_LOT_DEVICES = ["vitros"];
 function needsLotToLot(deviceName) {
   return !!deviceName && LOT_TO_LOT_DEVICES.includes(deviceName.trim().toLowerCase());
@@ -218,6 +229,7 @@ export default function App() {
       date_added: entry.receivedDate,
       added_by: entry.receivedBy,
       low_stock_threshold: entry.lowStockThreshold,
+      units_per_carton: entry.unitsPerCarton || null,
       intact_container: entry.intact_container,
       complete_compound: entry.complete_compound,
       expiration_validity: entry.expiration_validity,
@@ -306,6 +318,7 @@ export default function App() {
       current_quantity: updated.current_quantity,
       expiry_date: updated.expiry_date || null,
       low_stock_threshold: updated.low_stock_threshold,
+      units_per_carton: updated.units_per_carton ?? null,
       edited_by: username,
       edited_at: new Date().toISOString(),
     }).eq("id", updated.id);
@@ -906,7 +919,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
                 <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Min {g.fefo.low_stock_threshold} {g.unit}</div>
               </div>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{g.totalQty} {g.unit}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit).main}</span>
             </div>
           ))}
         </Panel>
@@ -1037,7 +1050,10 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
                       {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
                     </div>
                     <div style={{ fontSize: 12.5, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
-                      {g.totalQty} {g.unit} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
+                      {(() => {
+                        const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
+                        return <>{q.main}{q.sub && <span style={{ opacity: 0.7 }}> ({q.sub})</span>}</>;
+                      })()} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -1122,7 +1138,12 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onDi
                   <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: `1px solid ${THEME.cardBorder}`, flexWrap: "wrap" }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{r.name}</div>
-                      <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {r.lot_number} · {r.current_quantity} {r.unit} left</div>
+                      <div style={{ fontSize: 11.5, color: THEME.textMuted }}>
+                        Lot {r.lot_number} · {(() => {
+                          const q = formatCartonQty(r.current_quantity, r.units_per_carton, r.unit);
+                          return q.sub ? `${q.main} (${q.sub})` : `${q.main} left`;
+                        })()}
+                      </div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
                       <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px" }}>
@@ -1354,7 +1375,12 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 {idx === 0 && <span style={{ background: "#0F7173", color: "#fff", fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4 }}>USE FIRST</span>}
                 <div style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>Lot {it.lot_number}</div>
-                <div style={{ fontSize: 13 }}>{it.current_quantity}/{it.quantity_received} {it.unit}</div>
+                <div style={{ textAlign: "right", fontSize: 13 }}>
+                  {(() => {
+                    const q = formatCartonQty(it.current_quantity, it.units_per_carton, it.unit);
+                    return <>{q.main}{q.sub && <div style={{ fontSize: 10.5, color: "#8A9694" }}>{q.sub}</div>}</>;
+                  })()}
+                </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
                   {it.expiry_date && <div style={{ fontSize: 10.5, color: "#8A9694", marginTop: 1 }}>{it.expiry_date}</div>}
@@ -1826,7 +1852,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
             <select style={inputStyle} value={chosenLot ? chosenLot.id : ""} onChange={(e) => setSelectedLotId(e.target.value)}>
               {lots.map((l, idx) => (
                 <option key={l.id} value={l.id}>
-                  Lot {l.lot_number} — {l.current_quantity} {l.unit} left — {l.expiry_date ? `expires ${l.expiry_date}` : "no expiry"}{idx === 0 ? " (FEFO suggestion)" : ""}
+                  Lot {l.lot_number} — {(() => { const q = formatCartonQty(l.current_quantity, l.units_per_carton, l.unit); return q.sub ? `${q.main}, ${q.sub}` : `${q.main} left`; })()} — {l.expiry_date ? `expires ${l.expiry_date}` : "no expiry"}{idx === 0 ? " (FEFO suggestion)" : ""}
                 </option>
               ))}
             </select>
@@ -1837,7 +1863,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
             {selectedLotId && chosenLot.id !== fefo.id ? (
               <>You picked <b>Lot {chosenLot.lot_number}</b> instead of the FEFO suggestion (Lot {fefo.lot_number}).</>
             ) : (
-              <>Using <b>Lot {chosenLot.lot_number}</b> ({chosenLot.current_quantity} {chosenLot.unit} left, {chosenLot.expiry_date ? `expires ${chosenLot.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}</>
+              <>Using <b>Lot {chosenLot.lot_number}</b> ({(() => { const q = formatCartonQty(chosenLot.current_quantity, chosenLot.units_per_carton, chosenLot.unit); return q.sub ? `${q.main}, ${q.sub}` : `${q.main} left`; })()}, {chosenLot.expiry_date ? `expires ${chosenLot.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}</>
             )}
           </div>
         )}
@@ -1862,7 +1888,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({chosenLot?.unit || "unit"})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>{chosenLot?.units_per_carton ? `Boxes used (of ${chosenLot.units_per_carton}/carton)` : `Amount used (${chosenLot?.unit || "unit"})`}<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
         <label style={labelStyle}>Used by
@@ -1880,18 +1906,53 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
 function EditReagentModal({ reagent, onClose, onSave }) {
   const [form, setForm] = useState({ ...reagent });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const wasPackaged = !!reagent.units_per_carton;
+  const [packagingEnabled, setPackagingEnabled] = useState(wasPackaged);
+  const [unitsPerCarton, setUnitsPerCarton] = useState(reagent.units_per_carton || "");
+
+  function submit() {
+    const payload = { ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) };
+    if (packagingEnabled && unitsPerCarton) {
+      const upc = Number(unitsPerCarton);
+      if (!wasPackaged) {
+        // Newly enabling packaging: the existing numbers were plain units —
+        // convert them once into the new carton-based box count.
+        payload.quantity_received = payload.quantity_received * upc;
+        payload.current_quantity = payload.current_quantity * upc;
+      }
+      payload.units_per_carton = upc;
+    } else {
+      payload.units_per_carton = null;
+    }
+    onSave(payload);
+  }
+
   return (
     <Modal title={`Edit lot ${reagent.lot_number}`} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <label style={labelStyle}>Lot number<input style={inputStyle} value={form.lot_number} onChange={set("lot_number")} /></label>
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Quantity received<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} /></label>
-          <label style={{ ...labelStyle, flex: 1 }}>Current quantity<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Quantity received{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Current quantity{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} /></label>
         </div>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+          <input type="checkbox" checked={packagingEnabled} onChange={(e) => setPackagingEnabled(e.target.checked)} />
+          This item comes in cartons containing multiple {form.unit || "units"}
+        </label>
+        {packagingEnabled && (
+          <label style={labelStyle}>{form.unit || "Units"} per carton<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+        )}
+        {packagingEnabled && !wasPackaged && unitsPerCarton && (
+          <div style={{ fontSize: 11.5, color: "#0F7173" }}>
+            Quantities above will be converted once: {form.quantity_received} → {Number(form.quantity_received) * Number(unitsPerCarton)} {form.unit}, {form.current_quantity} → {Number(form.current_quantity) * Number(unitsPerCarton)} {form.unit}.
+          </div>
+        )}
+
         <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
         <label style={labelStyle}>Low stock alert below<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
         <button
-          onClick={() => onSave({ ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) })}
+          onClick={submit}
           style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}
         >Save changes</button>
       </div>
