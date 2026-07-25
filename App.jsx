@@ -427,14 +427,27 @@ export default function App() {
         updatePayload.deleted_by = null;
         updatePayload.deleted_at = null;
       }
-      // If this log entry had promoted this lot to "active on device", undo
-      // that too — demote it back, and restore whichever lot was active before.
-      if (log.active_device_changed) {
+      // If this log entry had promoted this lot to "active on device", undo that
+      // too — but only if no OTHER remaining (non-deleted) log entry still points
+      // to this same lot. If another entry still uses it, it's genuinely still the
+      // active lot and shouldn't be demoted just because we're undoing one entry.
+      const otherLogsForThisLot = logs.filter((l) => l.id !== log.id && l.reagent_id === item.id && !l.deleted);
+      const shouldRevertActiveStatus = log.active_device_changed && otherLogsForThisLot.length === 0;
+      if (shouldRevertActiveStatus) {
         updatePayload.active_on_device = false;
       }
       await supabase.from("reagents").update(updatePayload).eq("id", item.id);
-      if (log.active_device_changed && log.previous_active_lot_id) {
-        await supabase.from("reagents").update({ active_on_device: true }).eq("id", log.previous_active_lot_id);
+      if (shouldRevertActiveStatus && log.previous_active_lot_id) {
+        const prevLot = reagents.find((r) => r.id === log.previous_active_lot_id);
+        const prevPayload = { active_on_device: true };
+        if (prevLot && prevLot.deleted) {
+          // It had been auto-removed (e.g. depleted) — bring it back into view
+          // so it actually shows up as the active lot on the device again.
+          prevPayload.deleted = false;
+          prevPayload.deleted_by = null;
+          prevPayload.deleted_at = null;
+        }
+        await supabase.from("reagents").update(prevPayload).eq("id", log.previous_active_lot_id);
       }
     }
     await supabase.from("consumption_logs").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", log.id);
