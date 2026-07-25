@@ -1204,15 +1204,12 @@ function HistoryPage({ reagents, logs }) {
   return (
     <div>
       <input
-        list="history-reagent-names"
         placeholder="Search a reagent name…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
+        autoComplete="off"
         style={{ width: "100%", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 12 }}
       />
-      <datalist id="history-reagent-names">
-        {allNames.map((n) => <option key={n} value={n} />)}
-      </datalist>
 
       {matchedName && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
@@ -1830,14 +1827,27 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
             <option value="Other">Other</option>
           </select>
         </label>
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Reagent (type to search)
-            <input list="log-use-names" style={inputStyle} value={name} onChange={(e) => changeName(e.target.value)} placeholder="Search reagent name" />
-            <datalist id="log-use-names">
-              {names.map((n) => <option key={n} value={n} />)}
-            </datalist>
-          </label>
-          <button type="button" onClick={() => setShowScanner(true)} style={{ background: "#F0F3F2", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 10px" }}><ScanLine size={16} /></button>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <div style={{ flex: 1, position: "relative" }}>
+            <label style={labelStyle}>Reagent (type to search)
+              <input style={inputStyle} value={name} onChange={(e) => changeName(e.target.value)} placeholder="Search reagent name" autoComplete="off" />
+            </label>
+            {name.trim() && !names.includes(name) && names.filter((n) => n.toLowerCase().includes(name.trim().toLowerCase())).length > 0 && (
+              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #C7D1CE", borderRadius: 8, marginTop: 4, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 20px rgba(0,0,0,0.12)" }}>
+                {names.filter((n) => n.toLowerCase().includes(name.trim().toLowerCase())).slice(0, 8).map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => changeName(n)}
+                    style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #EEF2F0", padding: "10px 12px", fontSize: 14 }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button type="button" onClick={() => setShowScanner(true)} style={{ background: "#F0F3F2", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 10px", marginTop: 20 }}><ScanLine size={16} /></button>
         </div>
         {names.length === 0 && <div style={{ fontSize: 12.5, color: "#8A9694" }}>No items of this type in stock.</div>}
         {devicesForName.some(Boolean) && (

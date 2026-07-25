@@ -74,10 +74,23 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
         {step === 1 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
             <label style={labelStyle}>Item (type to search)
-              <input list="reagent-presets-list" style={inputStyle} value={form.name} onChange={handleNameChange} placeholder="Search or type a new name" />
-              <datalist id="reagent-presets-list">
-                {presets.map((p) => <option key={p.id} value={p.name} />)}
-              </datalist>
+              <div style={{ position: "relative" }}>
+                <input style={inputStyle} value={form.name} onChange={handleNameChange} placeholder="Search or type a new name" autoComplete="off" />
+                {form.name.trim() && !presets.some((p) => p.name === form.name) && presets.filter((p) => p.name.toLowerCase().includes(form.name.trim().toLowerCase())).length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #C7D1CE", borderRadius: 8, marginTop: 4, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 20px rgba(0,0,0,0.12)" }}>
+                    {presets.filter((p) => p.name.toLowerCase().includes(form.name.trim().toLowerCase())).slice(0, 8).map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleNameChange({ target: { value: p.name } })}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #EEF2F0", padding: "10px 12px", fontSize: 14 }}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </label>
             <label style={labelStyle}>Department
               <select style={inputStyle} value={form.department} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value, device: "" }))}>
@@ -85,10 +98,23 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
               </select>
             </label>
             <label style={labelStyle}>Device / analyzer (optional, type to search)
-              <input list="devices-list" style={inputStyle} value={form.device} onChange={set("device")} placeholder="e.g. Cobas c311" />
-              <datalist id="devices-list">
-                {devicesForDept.map((d) => <option key={d.id} value={d.name} />)}
-              </datalist>
+              <div style={{ position: "relative" }}>
+                <input style={inputStyle} value={form.device} onChange={set("device")} placeholder="e.g. Cobas c311" autoComplete="off" />
+                {form.device.trim() && !devicesForDept.some((d) => d.name === form.device) && devicesForDept.filter((d) => d.name.toLowerCase().includes(form.device.trim().toLowerCase())).length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #C7D1CE", borderRadius: 8, marginTop: 4, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 20px rgba(0,0,0,0.12)" }}>
+                    {devicesForDept.filter((d) => d.name.toLowerCase().includes(form.device.trim().toLowerCase())).slice(0, 8).map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setForm((f) => ({ ...f, device: d.name }))}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #EEF2F0", padding: "10px 12px", fontSize: 14 }}
+                      >
+                        {d.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </label>
             <label style={labelStyle}>Type
               <select style={inputStyle} value={form.itemType} onChange={set("itemType")}>
