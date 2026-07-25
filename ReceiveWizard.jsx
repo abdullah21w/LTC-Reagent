@@ -52,7 +52,10 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
   const packagingValid = !usePackaging || (unitsPerCarton && cartonsReceived);
   const step1Valid = form.name && form.lotNumber && (usePackaging ? packagingValid : form.quantityReceived) && form.receivedBy && form.receivedDate;
 
+  const [submitting, setSubmitting] = useState(false);
   function finish() {
+    if (submitting) return;
+    setSubmitting(true);
     const finalQty = usePackaging ? Number(unitsPerCarton) * Number(cartonsReceived) : Number(form.quantityReceived);
     onSubmit({
       ...form,
@@ -182,8 +185,8 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
             </label>
             <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
               <button onClick={() => setStep(1)} style={{ flex: 1, background: "#F0F3F2", color: "#1B2B2E", border: "1px solid #C7D1CE", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Back</button>
-              <button onClick={finish} style={{ flex: 2, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                <Check size={15} /> Add to inventory
+              <button onClick={finish} disabled={submitting} style={{ flex: 2, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: submitting ? 0.6 : 1 }}>
+                <Check size={15} /> {submitting ? "Saving…" : "Add to inventory"}
               </button>
             </div>
           </div>

@@ -1805,9 +1805,12 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
     setShowScanner(false);
   }
 
+  const [submitting, setSubmitting] = useState(false);
   function submit() {
     if (!chosenLot || !amount || !usedBy) return;
     if (pendingLtl && !ltlConfirmed) return;
+    if (submitting) return;
+    setSubmitting(true);
     onSubmit({ reagentId: chosenLot.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
   }
 
@@ -1907,7 +1910,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
         </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
-        <button onClick={submit} disabled={!chosenLot || (pendingLtl && !ltlConfirmed)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!chosenLot || (pendingLtl && !ltlConfirmed)) ? 0.5 : 1 }}>Save log</button>
+        <button onClick={submit} disabled={!chosenLot || (pendingLtl && !ltlConfirmed) || submitting} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!chosenLot || (pendingLtl && !ltlConfirmed) || submitting) ? 0.5 : 1 }}>{submitting ? "Saving…" : "Save log"}</button>
       </div>
       {showScanner && <BarcodeScanner onClose={() => setShowScanner(false)} onDetected={handleScan} />}
     </Modal>
@@ -1920,8 +1923,11 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const wasPackaged = !!reagent.units_per_carton;
   const [packagingEnabled, setPackagingEnabled] = useState(wasPackaged);
   const [unitsPerCarton, setUnitsPerCarton] = useState(reagent.units_per_carton || "");
+  const [saving, setSaving] = useState(false);
 
   function submit() {
+    if (saving) return;
+    setSaving(true);
     const payload = { ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) };
     if (packagingEnabled && unitsPerCarton) {
       const upc = Number(unitsPerCarton);
@@ -1964,9 +1970,10 @@ function EditReagentModal({ reagent, onClose, onSave }) {
         <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
         <label style={labelStyle}>Low stock alert below<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
         <button
+          disabled={saving}
           onClick={submit}
-          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}
-        >Save changes</button>
+          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}
+        >{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
   );
@@ -2007,6 +2014,12 @@ function DiscardModal({ reagent, onClose, onDiscard }) {
 function EditLogModal({ log, onClose, onSave }) {
   const [form, setForm] = useState({ ...log });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const [saving, setSaving] = useState(false);
+  function submit() {
+    if (saving) return;
+    setSaving(true);
+    onSave({ ...form, amount: Number(form.amount) }, log);
+  }
   return (
     <Modal title="Edit consumption log" onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -2015,7 +2028,7 @@ function EditLogModal({ log, onClose, onSave }) {
         <label style={labelStyle}>Used by<input style={inputStyle} value={form.used_by} onChange={set("used_by")} /></label>
         <label style={labelStyle}>Note<input style={inputStyle} value={form.note || ""} onChange={set("note")} /></label>
         <YesNoRow label="Tested by QC" value={form.tested_by_qc} onChange={(v) => setForm((f) => ({ ...f, tested_by_qc: v }))} />
-        <button onClick={() => onSave({ ...form, amount: Number(form.amount) }, log)} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Save changes</button>
+        <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
   );
