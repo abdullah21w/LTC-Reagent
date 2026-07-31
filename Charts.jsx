@@ -28,8 +28,16 @@ function shortLabel(iso) {
 export default function Charts({ reagents, logs }) {
   const names = [...new Set(reagents.map((r) => r.name))].sort();
   const [selected, setSelected] = useState(names[0] || "");
+  const [search, setSearch] = useState(names[0] || "");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
+
+  const suggestions = search.trim() && !names.includes(search) ? names.filter((n) => n.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8) : [];
+
+  function pick(n) {
+    setSearch(n);
+    setSelected(n);
+  }
 
   const lotsForReagent = useMemo(() => reagents.filter((r) => r.name === selected), [reagents, selected]);
   const lotIds = useMemo(() => new Set(lotsForReagent.map((r) => r.id)), [lotsForReagent]);
@@ -79,11 +87,22 @@ export default function Charts({ reagents, logs }) {
       <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20 }}>Pick a reagent and any date range to see daily usage and how much each device consumed vs received.</div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 20 }}>
-        <label style={{ flex: 1, minWidth: 180 }}>
-          <input list="charts-reagent-list" style={{ ...inputStyle, width: "100%" }} value={selected} onChange={(e) => setSelected(e.target.value)} placeholder="Search reagent…" />
-          <datalist id="charts-reagent-list">
-            {names.map((n) => <option key={n} value={n} />)}
-          </datalist>
+        <label style={{ flex: 1, minWidth: 180, position: "relative" }}>
+          <input style={{ ...inputStyle, width: "100%" }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search reagent…" autoComplete="off" />
+          {suggestions.length > 0 && (
+            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #C7D1CE", borderRadius: 8, marginTop: 4, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 20px rgba(0,0,0,0.12)" }}>
+              {suggestions.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => pick(n)}
+                  style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #EEF2F0", padding: "10px 12px", fontSize: 14 }}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          )}
         </label>
         <span style={{ fontSize: 12, color: "#7B8E8A" }}>From</span>
         <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={inputStyle} />
