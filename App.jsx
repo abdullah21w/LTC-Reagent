@@ -1644,60 +1644,69 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDe
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#8A9694", fontSize: 13.5 }}>No records match this filter.</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {matchedLogs.map((l) => {
-              const r = reagentById[l.reagent_id];
-              return (
-                <div key={l.id} style={{ background: "#fff", border: l.deleted ? "1px solid #C1432B55" : "1px solid #E1E8E5", borderRadius: 10, padding: 16, opacity: l.deleted ? 0.75 : 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
-                      {r ? r.name : "Unknown reagent"}
-                      {l.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {l.deleted_by} · {fmtDateTime(l.deleted_at)}</span>}
-                      {l.deleted && role === "owner" && (
-                        <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
-                      )}
-                      {!l.deleted && can("delete") && (
-                        <button onClick={() => onDeleteLog(l)} title="Undo this log entry" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r ? `${r.department} · Lot ${r.lot_number}${r.device ? ` · ${r.device}` : ""}` : ""}</div>
-                  </div>
+            {[
+              ...matchedLogs.map((l) => ({ _type: "log", _sortAt: new Date(l.date).getTime(), data: l })),
+              ...matchedDiscards.map((r) => ({ _type: "discard", _sortAt: new Date(r.deleted_at).getTime(), data: r })),
+            ]
+              .sort((a, b) => b._sortAt - a._sortAt)
+              .map((entry) => {
+                if (entry._type === "log") {
+                  const l = entry.data;
+                  const r = reagentById[l.reagent_id];
+                  return (
+                    <div key={l.id} style={{ background: "#fff", border: l.deleted ? "1px solid #C1432B55" : "1px solid #E1E8E5", borderRadius: 10, padding: 16, opacity: l.deleted ? 0.75 : 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                          {r ? r.name : "Unknown reagent"}
+                          {l.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {l.deleted_by} · {fmtDateTime(l.deleted_at)}</span>}
+                          {l.deleted && role === "owner" && (
+                            <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
+                          )}
+                          {!l.deleted && can("delete") && (
+                            <button onClick={() => onDeleteLog(l)} title="Undo this log entry" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r ? `${r.department} · Lot ${r.lot_number}${r.device ? ` · ${r.device}` : ""}` : ""}</div>
+                      </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
-                    <div><div style={{ color: "#1D4ED8", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Used by</div>{l.used_by}</div>
-                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{l.date}</div>
-                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Amount used</div>{l.amount} {r ? r.unit : ""}</div>
-                    <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Tested by QC</div>{l.tested_by_qc ? "Yes" : "No"}</div>
-                  </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 12, fontSize: 12.5 }}>
+                        <div><div style={{ color: "#1D4ED8", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Used by</div>{l.used_by}</div>
+                        <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{l.date}</div>
+                        <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Amount used</div>{l.amount} {r ? r.unit : ""}</div>
+                        <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Tested by QC</div>{l.tested_by_qc ? "Yes" : "No"}</div>
+                      </div>
 
-                  {l.note && (
-                    <div style={{ fontSize: 12, color: "#516361", background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px" }}>
-                      <b>Note:</b> {l.note}
+                      {l.note && (
+                        <div style={{ fontSize: 12, color: "#516361", background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px" }}>
+                          <b>Note:</b> {l.note}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-            {matchedDiscards.map((r) => (
-              <div key={"discard-" + r.id} style={{ background: "#fff", border: "1px solid #FBD5B5", borderRadius: 10, padding: 16, opacity: 0.9 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
-                    {r.name}
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", padding: "2px 7px", borderRadius: 4 }}>DISCARD</span>
+                  );
+                }
+                const r = entry.data;
+                return (
+                  <div key={"discard-" + r.id} style={{ background: "#fff", border: "1px solid #FBD5B5", borderRadius: 10, padding: 16, opacity: 0.9 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+                        {r.name}
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", padding: "2px 7px", borderRadius: 4 }}>DISCARD</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · Lot {r.lot_number}{r.device ? ` · ${r.device}` : ""}</div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, fontSize: 12.5 }}>
+                      <div><div style={{ color: "#8A5A2B", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Discarded by</div>{r.deleted_by}</div>
+                      <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{fmtDateTime(r.deleted_at)}</div>
+                      {role === "owner" && (
+                        <div style={{ gridColumn: "span 2" }}>
+                          <div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Reason (owner only)</div>
+                          {r.discard_reason}{r.discard_note ? `: ${r.discard_note}` : ""}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11.5, color: "#7B8E8A", fontFamily: "'IBM Plex Mono', monospace" }}>{r.department} · Lot {r.lot_number}{r.device ? ` · ${r.device}` : ""}</div>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, fontSize: 12.5 }}>
-                  <div><div style={{ color: "#8A5A2B", fontSize: 10.5, textTransform: "uppercase", fontWeight: 700 }}>Discarded by</div>{r.deleted_by}</div>
-                  <div><div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Date</div>{fmtDateTime(r.deleted_at)}</div>
-                  {role === "owner" && (
-                    <div style={{ gridColumn: "span 2" }}>
-                      <div style={{ color: "#8A9694", fontSize: 10.5, textTransform: "uppercase" }}>Reason (owner only)</div>
-                      {r.discard_reason}{r.discard_note ? `: ${r.discard_note}` : ""}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                );
+              })}
           </div>
         </>
       )}
