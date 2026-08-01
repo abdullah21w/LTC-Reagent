@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Trash2, Plus, Save, RefreshCw, Pencil } from "lucide-react";
+import { Trash2, Plus, Save, RefreshCw, Pencil, Download } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { hashPassword } from "./passwordUtils";
 
@@ -83,6 +83,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     backup_enabled: config.backup_enabled || false,
     backup_email: config.backup_email || "",
     backup_frequency_days: config.backup_frequency_days || 7,
+    monthly_report_enabled: config.monthly_report_enabled || false,
+    monthly_report_email: config.monthly_report_email || "",
   });
   const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
   const [newAlertDay, setNewAlertDay] = useState("");
@@ -438,6 +440,34 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             {config.backup_last_sent && <div style={{ fontSize: 11.5, color: "#8A9694" }}>Last backup sent: {config.backup_last_sent}</div>}
             <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save backup settings
+            </button>
+            {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3, marginTop: 30 }}>MONTHLY PDF REPORT</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            A print-ready summary — most used reagents, what needs attention, discards, and new stock received. Download it anytime, or turn on automatic delivery to get last month's report by email on the 1st of every month.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <a
+              href="/api/generate-report"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none" }}
+            >
+              <Download size={14} /> Download this month's report now
+            </a>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "#3A4A48", cursor: "pointer", marginTop: 6 }}>
+              <input type="checkbox" checked={creds.monthly_report_enabled} onChange={(e) => setCreds((c) => ({ ...c, monthly_report_enabled: e.target.checked }))} />
+              Email me last month's report automatically on the 1st
+            </label>
+            <label style={labelStyle}>Send to
+              <input type="email" style={inputStyle} placeholder="you@example.com" value={creds.monthly_report_email} onChange={(e) => setCreds((c) => ({ ...c, monthly_report_email: e.target.value }))} />
+            </label>
+            {config.monthly_report_last_sent && <div style={{ fontSize: 11.5, color: "#8A9694" }}>Last automatic report sent for: {config.monthly_report_last_sent}</div>}
+            <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Save size={14} /> Save report settings
             </button>
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>

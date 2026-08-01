@@ -66,6 +66,9 @@ create table if not exists app_config (
   backup_email text not null default '',
   backup_frequency_days int not null default 7,
   backup_last_sent date,
+  monthly_report_enabled boolean not null default false,
+  monthly_report_email text not null default '',
+  monthly_report_last_sent text,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 
