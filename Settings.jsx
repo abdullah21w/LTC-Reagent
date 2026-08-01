@@ -90,6 +90,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   const [newAlertDay, setNewAlertDay] = useState("");
   const [msg, setMsg] = useState("");
   const [maintMsg, setMaintMsg] = useState("");
+  const [reportMonth, setReportMonth] = useState(new Date().getMonth() + 1);
+  const [reportYear, setReportYear] = useState(new Date().getFullYear());
 
   function addAlertDay() {
     const n = Number(newAlertDay);
@@ -449,13 +451,30 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             A print-ready summary — most used reagents, what needs attention, discards, and new stock received. Download it anytime, or turn on automatic delivery to get last month's report by email on the 1st of every month.
           </div>
           <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <label style={{ ...labelStyle, flex: 1 }}>Month
+                <select style={inputStyle} value={reportMonth} onChange={(e) => setReportMonth(Number(e.target.value))}>
+                  {["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"].map((m, i) => (
+                    <option key={m} value={i + 1}>{m}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ ...labelStyle, flex: 1 }}>Year
+                <select style={inputStyle} value={reportYear} onChange={(e) => setReportYear(Number(e.target.value))}>
+                  {[0, 1, 2].map((back) => {
+                    const y = new Date().getFullYear() - back;
+                    return <option key={y} value={y}>{y}</option>;
+                  })}
+                </select>
+              </label>
+            </div>
             <a
-              href="/api/generate-report"
+              href={`/api/generate-report?year=${reportYear}&month=${reportMonth}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none" }}
             >
-              <Download size={14} /> Download this month's report now
+              <Download size={14} /> Download report for this month
             </a>
 
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "#3A4A48", cursor: "pointer", marginTop: 6 }}>

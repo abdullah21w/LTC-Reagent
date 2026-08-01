@@ -630,7 +630,7 @@ export default function App() {
             </div>
           )}
 
-          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
+          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} reagents={reagents} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
             <DetailView
               group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
@@ -810,7 +810,7 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteReagent, onDiscardReagent, onSelect, onViewDevices }) {
+function Dashboard({ groups, counts, departments, devices, logs, reagents, can, onDeleteReagent, onDiscardReagent, onSelect, onViewDevices }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
   const [deviceFilter, setDeviceFilter] = useState("all");
@@ -832,7 +832,7 @@ function Dashboard({ groups, counts, departments, devices, logs, can, onDeleteRe
   const lowStockList = groups.filter((g) => g.lowStock).slice(0, 5);
   const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   const reagentById = {};
-  groups.forEach((g) => g.items.forEach((i) => { reagentById[i.id] = { name: g.name, device: g.device, unit: g.unit }; }));
+  (reagents || []).forEach((i) => { reagentById[i.id] = { name: i.name, device: i.device, unit: i.unit }; });
 
   const predictedList = groups
     .filter((g) => g.predictedDaysLeft !== null && g.predictedDaysLeft <= 14)
