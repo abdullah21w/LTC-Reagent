@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -646,6 +646,7 @@ export default function App() {
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onDiscard={setDiscardReagentTarget} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
+          {tab === "calendar" && can("dashboard") && <CalendarPage reagents={reagents} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} groups={groups} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -685,6 +686,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         {can("reports") && <SideItem active={tab === "reports"} onClick={() => go("reports")} icon={<FileText size={16} />} label="Reports" />}
         {can("dashboard") && <SideItem active={tab === "devices"} onClick={() => go("devices")} icon={<Cpu size={16} />} label="Devices" />}
         {can("dashboard") && <SideItem active={tab === "history"} onClick={() => go("history")} icon={<Archive size={16} />} label="History" />}
+        {can("dashboard") && <SideItem active={tab === "calendar"} onClick={() => go("calendar")} icon={<CalendarDays size={16} />} label="Calendar" />}
         {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
@@ -726,13 +728,14 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
   reports: "Full inventory and consumption history",
   devices: "What's currently loaded on each device",
   history: "Search any reagent's full lot and usage history",
+  calendar: "Expiry dates laid out by day",
   settings: "Manage users, permissions, and defaults",
   charts: "Consumption trends over time",
   deletions: "Full record of edits and deletions",
@@ -1330,6 +1333,119 @@ function HistoryPage({ reagents, logs }) {
             )}
           </Panel>
         </>
+      )}
+    </div>
+  );
+}
+
+function CalendarPage({ reagents, groups, onSelectGroup }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const [selectedDay, setSelectedDay] = useState(null);
+
+  const active = (reagents || []).filter((r) => !r.deleted && r.expiry_date);
+  const byDay = {};
+  active.forEach((r) => {
+    const key = r.expiry_date;
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(r);
+  });
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth(); // 0-based
+  const monthLabel = cursor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const firstWeekday = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = todayISO();
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  function dayKey(d) {
+    return `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+
+  function changeMonth(delta) {
+    const d = new Date(cursor);
+    d.setMonth(d.getMonth() + delta);
+    setCursor(d);
+    setSelectedDay(null);
+  }
+
+  function findGroupFor(item) {
+    return groups.find((g) => g.name === item.name && (g.device || "") === (item.device || ""));
+  }
+
+  const selectedItems = selectedDay ? (byDay[selectedDay] || []) : [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+        <button onClick={() => changeMonth(-1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronLeft size={16} /></button>
+        <div style={{ fontSize: 16, fontWeight: 700, color: THEME.text }}>{monthLabel}</div>
+        <button onClick={() => changeMonth(1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronRight size={16} /></button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+          <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: THEME.textMuted, padding: "4px 0" }}>{d}</div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {cells.map((d, i) => {
+          if (d === null) return <div key={"e" + i} />;
+          const key = dayKey(d);
+          const items = byDay[key] || [];
+          const hasExpired = items.some((it) => key < today);
+          const hasSoon = items.some((it) => key >= today);
+          const isToday = key === today;
+          const bg = items.length === 0 ? THEME.cardBg : hasExpired ? "#FBEAE6" : "#FBF3DF";
+          const border = isToday ? THEME.primary : THEME.cardBorder;
+          return (
+            <button
+              key={key}
+              onClick={() => items.length > 0 && setSelectedDay(selectedDay === key ? null : key)}
+              style={{
+                background: bg, border: `1.5px solid ${border}`, borderRadius: 8, minHeight: 64,
+                padding: 6, textAlign: "left", cursor: items.length ? "pointer" : "default",
+                display: "flex", flexDirection: "column", gap: 2,
+              }}
+            >
+              <div style={{ fontSize: 11.5, fontWeight: isToday ? 800 : 600, color: isToday ? THEME.primary : THEME.text }}>{d}</div>
+              {items.slice(0, 2).map((it) => (
+                <div key={it.id} style={{ fontSize: 9.5, color: hasExpired && key < today ? "#C1432B" : "#B8860B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+              ))}
+              {items.length > 2 && <div style={{ fontSize: 9, color: THEME.textMuted }}>+{items.length - 2} more</div>}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedDay && (
+        <div style={{ marginTop: 20 }}>
+          <Panel title={`${selectedDay} — ${selectedItems.length} lot(s)`}>
+            {selectedItems.map((it) => {
+              const g = findGroupFor(it);
+              const expired = selectedDay < today;
+              return (
+                <div
+                  key={it.id}
+                  onClick={() => g && onSelectGroup(g)}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: g ? "pointer" : "default" }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{it.name}</div>
+                    <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {it.lot_number}{it.device ? ` · ${it.device}` : ""} · {it.current_quantity} {it.unit} left</div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: expired ? "#C1432B" : "#B8860B", background: expired ? "#FBEAE6" : "#FBF3DF", borderRadius: 6, padding: "3px 8px" }}>
+                    {expired ? "Expired" : "Expiring"}
+                  </span>
+                </div>
+              );
+            })}
+          </Panel>
+        </div>
       )}
     </div>
   );

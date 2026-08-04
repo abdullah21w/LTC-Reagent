@@ -85,6 +85,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     backup_frequency_days: config.backup_frequency_days || 7,
     monthly_report_enabled: config.monthly_report_enabled || false,
     monthly_report_email: config.monthly_report_email || "",
+    owner_2fa_enabled: config.owner_2fa_enabled || false,
+    owner_2fa_email: config.owner_2fa_email || "",
   });
   const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
   const [newAlertDay, setNewAlertDay] = useState("");
@@ -382,6 +384,25 @@ export default function Settings({ config, presets, role, staffAccounts, devices
 
           <div style={{ fontSize: 11.5, color: "#8A9694", marginTop: 14, marginBottom: 30 }}>
             Note: these credentials are stored as plain text and are visible to anyone with the app link — fine for internal use, not for sensitive data.
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>TWO-FACTOR AUTHENTICATION</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            When on, signing in as Owner also requires a 6-digit code emailed to you — even if someone guesses the password, they can't get in without access to this inbox too.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12, marginBottom: 30 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+              <input type="checkbox" checked={creds.owner_2fa_enabled} onChange={(e) => setCreds((c) => ({ ...c, owner_2fa_enabled: e.target.checked }))} />
+              Require a code when the Owner signs in
+            </label>
+            <label style={labelStyle}>Send codes to
+              <input type="email" style={inputStyle} placeholder="you@example.com" value={creds.owner_2fa_email} onChange={(e) => setCreds((c) => ({ ...c, owner_2fa_email: e.target.value }))} />
+            </label>
+            <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Save size={14} /> Save security settings
+            </button>
+            {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
+            <div style={{ fontSize: 11, color: "#8A9694" }}>⚠️ Make sure the email above is correct and reachable before saving — if you lose access to it, you'll need to edit the database directly to sign back in.</div>
           </div>
 
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EXPIRY EMAIL ALERTS</div>

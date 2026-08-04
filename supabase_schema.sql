@@ -69,6 +69,10 @@ create table if not exists app_config (
   monthly_report_enabled boolean not null default false,
   monthly_report_email text not null default '',
   monthly_report_last_sent text,
+  owner_2fa_enabled boolean not null default false,
+  owner_2fa_email text not null default '',
+  owner_2fa_code text,
+  owner_2fa_code_expires timestamptz,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 
