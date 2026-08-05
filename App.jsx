@@ -337,6 +337,14 @@ export default function App() {
     loadAll();
   }
 
+  async function restoreReagent(id) {
+    if (!can("delete")) return;
+    const item = reagents.find((r) => r.id === id);
+    await supabase.from("reagents").update({ deleted: false, deleted_by: null, deleted_at: null }).eq("id", id);
+    await logActivity("edit", "reagent", `${item ? item.name : ""} — Lot ${item ? item.lot_number : id} restored`.trim());
+    loadAll();
+  }
+
   async function discardReagent(id, reason, note) {
     if (!can("discard")) return;
     const item = reagents.find((r) => r.id === id);
@@ -643,7 +651,7 @@ export default function App() {
               onEditLog={setEditLog} onDeleteLog={deleteLog}
             />
           )}
-          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
+          {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onRestoreReagent={restoreReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onDiscard={setDiscardReagentTarget} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "calendar" && can("dashboard") && <CalendarPage reagents={reagents} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} groups={groups} />}
@@ -1563,7 +1571,7 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
+function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onRestoreReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
   const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -1710,6 +1718,9 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onDe
                     <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
                       {r.name}
                       {r.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {r.deleted_by} · {fmtDateTime(r.deleted_at)}</span>}
+                      {r.deleted && can("delete") && (
+                        <button onClick={() => onRestoreReagent(r.id)} style={{ background: "none", border: "1px solid #0F7173", color: "#0F7173", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Restore</button>
+                      )}
                       {r.deleted && role === "owner" && (
                         <button onClick={() => onPurgeReagent(r.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
                       )}
