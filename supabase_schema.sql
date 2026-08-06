@@ -73,6 +73,7 @@ create table if not exists app_config (
   owner_2fa_email text not null default '',
   owner_2fa_code text,
   owner_2fa_code_expires timestamptz,
+  reorder_coverage_days int not null default 30,
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 
@@ -130,6 +131,19 @@ create table if not exists lot_to_lot_pending (
   unique (reagent_name, device)
 );
 
+-- Temporarily silences the "Low stock" flag for a reagent+device combo, e.g.
+-- when a reorder is already on its way. Never suppresses Critical (expired/
+-- out of stock) status.
+create table if not exists low_stock_snoozes (
+  id uuid primary key default gen_random_uuid(),
+  reagent_name text not null,
+  device text not null,
+  snoozed_until date not null,
+  snoozed_by text not null,
+  created_at timestamptz not null default now(),
+  unique (reagent_name, device)
+);
+
 alter table reagents enable row level security;
 alter table consumption_logs enable row level security;
 alter table app_config enable row level security;
@@ -138,6 +152,7 @@ alter table staff_accounts enable row level security;
 alter table audit_log enable row level security;
 alter table devices enable row level security;
 alter table lot_to_lot_pending enable row level security;
+alter table low_stock_snoozes enable row level security;
 
 create policy "allow all reagents" on reagents for all using (true) with check (true);
 create policy "allow all consumption_logs" on consumption_logs for all using (true) with check (true);
@@ -147,6 +162,7 @@ create policy "allow all staff_accounts" on staff_accounts for all using (true) 
 create policy "allow all audit_log" on audit_log for all using (true) with check (true);
 create policy "allow all devices" on devices for all using (true) with check (true);
 create policy "allow all lot_to_lot_pending" on lot_to_lot_pending for all using (true) with check (true);
+create policy "allow all low_stock_snoozes" on low_stock_snoozes for all using (true) with check (true);
 
 -- Note: this is an open (RLS "allow all") setup — fine for an internal lab tool
 -- with no patient data. Anyone with the app link and Supabase keys can read/write.

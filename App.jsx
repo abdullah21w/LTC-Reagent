@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -106,6 +106,7 @@ export default function App() {
   const [devices, setDevices] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [lotToLotPending, setLotToLotPending] = useState([]);
+  const [snoozes, setSnoozes] = useState([]);
   const [lotToLotNotice, setLotToLotNotice] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [showWizard, setShowWizard] = useState(false);
@@ -144,6 +145,7 @@ export default function App() {
     const { data: a } = await supabase.from("audit_log").select("*").order("performed_at", { ascending: false });
     const { data: dv } = await supabase.from("devices").select("*").order("name");
     const { data: ltl } = await supabase.from("lot_to_lot_pending").select("*");
+    const { data: sn } = await supabase.from("low_stock_snoozes").select("*");
     if (e1 || e2) {
       setError("Could not connect to the database. Check Supabase settings.");
       setReagents([]);
@@ -157,6 +159,7 @@ export default function App() {
     setActivityLog(a || []);
     setDevices(dv || []);
     setLotToLotPending(ltl || []);
+    setSnoozes(sn || []);
   }
 
   async function logActivity(action, entity, description, performedBy) {
@@ -363,6 +366,23 @@ export default function App() {
     loadAll();
   }
 
+  async function snoozeLowStock(name, device, days) {
+    if (!can("edit")) return;
+    const until = new Date();
+    until.setDate(until.getDate() + Number(days));
+    await supabase.from("low_stock_snoozes").upsert(
+      { reagent_name: name, device: device || "", snoozed_until: until.toISOString().slice(0, 10), snoozed_by: username },
+      { onConflict: "reagent_name,device" }
+    );
+    loadAll();
+  }
+
+  async function unsnoozeLowStock(name, device) {
+    if (!can("edit")) return;
+    await supabase.from("low_stock_snoozes").delete().eq("reagent_name", name).eq("device", device || "");
+    loadAll();
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // MAINTENANCE (Owner only, triggered manually from Settings → "Run maintenance")
   // Applies fixed/updated rules retroactively to existing data that was created
@@ -508,7 +528,10 @@ export default function App() {
       const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
       const anyExpiredOrEmpty = items.some((i) => (i.expiry_date && daysBetween(i.expiry_date, todayISO()) < 0) || i.current_quantity <= 0);
       const flagged = items.some(hasInspectionIssue);
-      const lowStock = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
+      const lowStockRaw = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
+      const activeSnooze = (snoozes || []).find((s) => s.reagent_name === items[0].name && s.device === (items[0].device || "") && s.snoozed_until >= todayISO());
+      const lowStock = lowStockRaw && !activeSnooze;
+      const snoozedUntil = activeSnooze ? activeSnooze.snoozed_until : null;
       const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
       const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
 
@@ -517,9 +540,9 @@ export default function App() {
       const dailyRate = recentUsed / 30;
       const predictedDaysLeft = dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
 
-      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, expiringSoon, dailyRate, predictedDaysLeft };
+      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, lowStockRaw, snoozedUntil, expiringSoon, dailyRate, predictedDaysLeft };
     });
-  }, [reagents, warnDays, logs]);
+  }, [reagents, warnDays, logs, snoozes]);
 
   const counts = useMemo(() => {
     const c = { red: 0, yellow: 0, green: 0, flagged: 0, lowStock: 0, expiringSoon: 0 };
@@ -638,7 +661,7 @@ export default function App() {
             </div>
           )}
 
-          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} reagents={reagents} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} />}
+          {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} reagents={reagents} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} onSnooze={snoozeLowStock} onUnsnooze={unsnoozeLowStock} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
             <DetailView
               group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
@@ -649,12 +672,14 @@ export default function App() {
               onBack={() => setTab("dashboard")}
               onEditReagent={setEditReagent} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget}
               onEditLog={setEditLog} onDeleteLog={deleteLog}
+              onSnooze={snoozeLowStock} onUnsnooze={unsnoozeLowStock}
             />
           )}
           {tab === "reports" && can("reports") && <Reports reagents={reagents} logs={logs} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onRestoreReagent={restoreReagent} onDeleteLog={deleteLog} onPurgeReagent={purgeReagent} onPurgeLog={purgeLog} />}
           {tab === "devices" && can("dashboard") && <DevicesBoard reagents={reagents} devices={devices} warnDays={warnDays} can={can} onEdit={setEditReagent} onDelete={deleteReagent} onDiscard={setDiscardReagentTarget} onRemove={removeFromDevice} />}
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "calendar" && can("dashboard") && <CalendarPage reagents={reagents} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} groups={groups} />}
+          {tab === "reorder" && can("dashboard") && <ReorderPage groups={groups} coverageDays={config.reorder_coverage_days ?? 30} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -695,6 +720,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         {can("dashboard") && <SideItem active={tab === "devices"} onClick={() => go("devices")} icon={<Cpu size={16} />} label="Devices" />}
         {can("dashboard") && <SideItem active={tab === "history"} onClick={() => go("history")} icon={<Archive size={16} />} label="History" />}
         {can("dashboard") && <SideItem active={tab === "calendar"} onClick={() => go("calendar")} icon={<CalendarDays size={16} />} label="Calendar" />}
+        {can("dashboard") && <SideItem active={tab === "reorder"} onClick={() => go("reorder")} icon={<ShoppingCart size={16} />} label="Reorder" />}
         {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
@@ -736,7 +762,7 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", reorder: "Reorder", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
@@ -744,6 +770,7 @@ const TAB_SUBTITLES = {
   devices: "What's currently loaded on each device",
   history: "Search any reagent's full lot and usage history",
   calendar: "Expiry dates laid out by day",
+  reorder: "Suggested reorder quantities based on usage",
   settings: "Manage users, permissions, and defaults",
   charts: "Consumption trends over time",
   deletions: "Full record of edits and deletions",
@@ -821,11 +848,12 @@ function GaugeBar({ pct, color }) {
   );
 }
 
-function Dashboard({ groups, counts, departments, devices, logs, reagents, can, onDeleteReagent, onDiscardReagent, onSelect, onViewDevices }) {
+function Dashboard({ groups, counts, departments, devices, logs, reagents, can, onDeleteReagent, onDiscardReagent, onSelect, onViewDevices, onSnooze, onUnsnooze }) {
   const [search, setSearch] = useState("");
   const [activeDept, setActiveDept] = useState("all");
   const [deviceFilter, setDeviceFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [snoozingKey, setSnoozingKey] = useState(null);
 
   if (groups.length === 0) {
     return (
@@ -939,14 +967,39 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
         <Panel title="Low stock" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("low")}>View all</span>}>
           {lowStockList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing low on stock.</div>}
           {lowStockList.map((g) => (
-            <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
-                <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Min {g.fefo.low_stock_threshold} {g.unit}</div>
+            <div key={g.key} style={{ padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div onClick={() => onSelect(g)} style={{ minWidth: 0, flex: 1, cursor: "pointer" }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Min {g.fefo.low_stock_threshold} {g.unit}</div>
+                </div>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit).main}</span>
+                {can("edit") && (
+                  <button onClick={() => setSnoozingKey(snoozingKey === g.key ? null : g.key)} title="Snooze this alert" style={{ background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "3px 6px", color: THEME.textMuted, flexShrink: 0 }}>
+                    <Clock size={13} />
+                  </button>
+                )}
               </div>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit).main}</span>
+              {snoozingKey === g.key && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {[3, 7, 14, 30].map((d) => (
+                    <button key={d} onClick={() => { onSnooze(g.name, g.device, d); setSnoozingKey(null); }} style={{ fontSize: 11.5, background: "#F0F3F2", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "4px 9px", color: THEME.text }}>{d}d</button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
+          {groups.filter((g) => g.snoozedUntil).length > 0 && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${THEME.cardBorder}` }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: THEME.textMuted, textTransform: "uppercase", marginBottom: 6 }}>Snoozed</div>
+              {groups.filter((g) => g.snoozedUntil).map((g) => (
+                <div key={"snz-" + g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 12 }}>
+                  <div style={{ color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name} — until {g.snoozedUntil}</div>
+                  {can("edit") && <button onClick={() => onUnsnooze(g.name, g.device)} style={{ fontSize: 11, color: THEME.primary, background: "none", border: "none", fontWeight: 600, flexShrink: 0 }}>Unsnooze</button>}
+                </div>
+              ))}
+            </div>
+          )}
         </Panel>
 
         <Panel title="Recent usage">
@@ -1459,7 +1512,57 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
   );
 }
 
-function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog }) {
+function ReorderPage({ groups, coverageDays, onSelectGroup }) {
+  const suggestions = groups
+    .map((g) => {
+      const target = Math.ceil((g.dailyRate || 0) * coverageDays);
+      const suggestedQty = target - g.totalQty;
+      return { ...g, target, suggestedQty };
+    })
+    .filter((g) => g.dailyRate > 0 && g.suggestedQty > 0)
+    .sort((a, b) => b.suggestedQty - a.suggestedQty);
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: THEME.textMuted, marginBottom: 20 }}>
+        Based on each reagent's actual usage rate (last 30 days) and a target coverage of <b>{coverageDays} days</b> — change this in Settings.
+      </div>
+
+      <Panel title={`Suggested reorders (${suggestions.length})`}>
+        {suggestions.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing needs reordering right now based on current usage rates.</div>}
+        {suggestions.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Reagent</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600, textAlign: "right" }}>Daily use</th>
+                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600, textAlign: "right" }}>In stock</th>
+                  <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Suggested order</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suggestions.map((g) => (
+                  <tr key={g.key} onClick={() => onSelectGroup(g)} style={{ borderTop: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
+                    <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{g.name}</td>
+                    <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{g.device || "—"}</td>
+                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{g.dailyRate.toFixed(1)} {g.unit}</td>
+                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{g.totalQty} {g.unit}</td>
+                    <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 700, color: THEME.primary }}>{g.suggestedQty} {g.unit}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog, onSnooze, onUnsnooze }) {
+  const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const last30 = logs.filter((l) => daysBetween(todayISO(), l.date) <= 30);
   const consumed30 = last30.reduce((s, l) => s + l.amount, 0);
   const avgDaily = consumed30 / 30;
@@ -1477,12 +1580,35 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
     <div>
       <button onClick={onBack} style={{ background: "none", border: "none", color: "#0F7173", fontSize: 13, fontWeight: 600, marginBottom: 18, display: "flex", alignItems: "center", gap: 4 }}>← Back to dashboard</button>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{group.name}</h2>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 20, fontFamily: "'IBM Plex Mono', monospace" }}>
+      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>
         {group.department}{group.device ? ` · ${group.device}` : ""} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)
         {group.predictedDaysLeft !== null && group.predictedDaysLeft !== undefined && (
           <> · <span style={{ color: group.predictedDaysLeft <= 3 ? "#C1432B" : group.predictedDaysLeft <= 14 ? "#B8860B" : "#7B8E8A", fontWeight: 700 }}>~{group.predictedDaysLeft}d left at current usage rate</span></>
         )}
       </div>
+      {group.lowStockRaw && can("edit") && (
+        <div style={{ marginBottom: 20 }}>
+          {group.snoozedUntil ? (
+            <div style={{ fontSize: 12.5, color: "#B8860B", display: "flex", alignItems: "center", gap: 8 }}>
+              Low-stock alert snoozed until {group.snoozedUntil}
+              <button onClick={() => onUnsnooze(group.name, group.device)} style={{ fontSize: 12, color: "#0F7173", background: "none", border: "none", fontWeight: 600 }}>Unsnooze</button>
+            </div>
+          ) : (
+            <>
+              <button onClick={() => setShowSnoozePicker(!showSnoozePicker)} style={{ fontSize: 12.5, color: "#B8860B", background: "#FBF3DF", border: "1px solid #F5E1A8", borderRadius: 6, padding: "5px 10px", fontWeight: 600 }}>
+                Snooze low-stock alert
+              </button>
+              {showSnoozePicker && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  {[3, 7, 14, 30].map((d) => (
+                    <button key={d} onClick={() => { onSnooze(group.name, group.device, d); setShowSnoozePicker(false); }} style={{ fontSize: 11.5, background: "#F0F3F2", border: "1px solid #E1E8E5", borderRadius: 6, padding: "4px 9px" }}>{d}d</button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
         <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>

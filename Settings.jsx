@@ -79,6 +79,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     owner_password: config.owner_password,
     low_stock_default_percent: config.low_stock_default_percent,
     expiry_warning_days: config.expiry_warning_days ?? 30,
+    reorder_coverage_days: config.reorder_coverage_days ?? 30,
     alert_email: config.alert_email || "",
     backup_enabled: config.backup_enabled || false,
     backup_email: config.backup_email || "",
@@ -375,6 +376,9 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             </label>
             <label style={labelStyle}>Expiry warning threshold (days before expiry to mark "Watch")
               <input type="number" min="1" style={inputStyle} value={creds.expiry_warning_days} onChange={(e) => setCreds((c) => ({ ...c, expiry_warning_days: Number(e.target.value) }))} />
+            </label>
+            <label style={labelStyle}>Reorder coverage target (days of stock the "Reorder" page aims to cover)
+              <input type="number" min="1" style={inputStyle} value={creds.reorder_coverage_days} onChange={(e) => setCreds((c) => ({ ...c, reorder_coverage_days: Number(e.target.value) }))} />
             </label>
             <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save settings
