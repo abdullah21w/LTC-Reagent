@@ -184,7 +184,7 @@ export default function App() {
     loadAll();
   }, []);
 
-  function handleLogin(newRole, newUsername, newPerms, newAccountId) {
+  async function handleLogin(newRole, newUsername, newPerms, newAccountId) {
     const effectivePerms = newRole === "owner" ? FULL_PERMISSIONS : (newPerms || {});
     localStorage.setItem("reagent_role", newRole);
     localStorage.setItem("reagent_username", newUsername);
@@ -196,18 +196,37 @@ export default function App() {
     setPerms(effectivePerms);
     setAccountId(newAccountId || null);
 
-    // "What changed since your last login" — compare against this user's
-    // previous login event (already in activityLog, since this new one
-    // hasn't been recorded yet at this point).
+    // "What changed since your last login" — compare precisely against a
+    // snapshot of exactly which groups were Critical/Low stock at the time
+    // of this user's previous login, not a date-based guess.
     const myPastLogins = (activityLog || [])
       .filter((e) => e.action === "login" && e.performed_by === newUsername)
       .sort((a, b) => new Date(b.performed_at) - new Date(a.performed_at));
+    const currentCriticalKeys = groups.filter((g) => g.status === "red").map((g) => g.key);
+    const currentLowStockKeys = groups.filter((g) => g.lowStock).map((g) => g.key);
+
     if (myPastLogins[0]) {
       const since = myPastLogins[0].performed_at.slice(0, 10);
       const received = (reagents || []).filter((r) => r.date_added >= since).length;
       const used = (logs || []).filter((l) => !l.deleted && l.date >= since).length;
-      setLoginSummary({ since, received, used, critical: counts.red, lowStock: counts.lowStock });
+
+      const { data: prevSnap } = await supabase
+        .from("login_snapshots")
+        .select("critical_keys,low_stock_keys")
+        .eq("username", newUsername)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const prevCritical = new Set((prevSnap && prevSnap.critical_keys) || []);
+      const prevLowStock = new Set((prevSnap && prevSnap.low_stock_keys) || []);
+      const newCritical = currentCriticalKeys.filter((k) => !prevCritical.has(k)).length;
+      const newLowStock = currentLowStockKeys.filter((k) => !prevLowStock.has(k)).length;
+
+      setLoginSummary({ since, received, used, critical: newCritical, lowStock: newLowStock });
     }
+
+    await supabase.from("login_snapshots").insert({ username: newUsername, critical_keys: currentCriticalKeys, low_stock_keys: currentLowStockKeys });
 
     logActivity("login", "user", `${newUsername} (${newRole === "owner" ? "Owner" : "Staff"}) signed in`, newUsername);
     const order = ["dashboard", "reports", "charts", "settings"];
@@ -606,7 +625,7 @@ export default function App() {
 
   const urlToken = new URLSearchParams(window.location.search).get("public");
   if (urlToken && config.public_view_enabled && config.public_view_token && urlToken === config.public_view_token) {
-    return <PublicSummaryPage groups={groups} counts={counts} />;
+    return <PublicSummaryPage groups={groups} counts={counts} logs={logs} reagents={reagents} departments={config.departments || []} />;
   }
 
   if (!role) return <Login config={config} staffAccounts={staffAccounts} onLogin={handleLogin} />;
@@ -698,8 +717,8 @@ export default function App() {
               <History size={18} color="#0F7173" />
               <div style={{ flex: 1, fontSize: 13.5, color: "#0F5F5B" }}>
                 Since your last login ({loginSummary.since}): <b>{loginSummary.received}</b> received, <b>{loginSummary.used}</b> used
-                {loginSummary.critical > 0 && <> · <b style={{ color: "#C1432B" }}>{loginSummary.critical} critical</b></>}
-                {loginSummary.lowStock > 0 && <> · <b style={{ color: "#B8860B" }}>{loginSummary.lowStock} low stock</b></>}
+                {loginSummary.critical > 0 && <> · <b style={{ color: "#C1432B" }}>{loginSummary.critical} newly critical</b></>}
+                {loginSummary.lowStock > 0 && <> · <b style={{ color: "#B8860B" }}>{loginSummary.lowStock} newly low stock</b></>}
               </div>
               <button onClick={() => setLoginSummary(null)} style={{ background: "none", border: "none", color: "#0F5F5B" }}><X size={16} /></button>
             </div>
@@ -741,10 +760,31 @@ export default function App() {
   );
 }
 
-function PublicSummaryPage({ groups, counts }) {
+function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
+  const [search, setSearch] = useState("");
+  const [deptFilter, setDeptFilter] = useState("all");
+
+  const cardStyle = { background: "#fff", border: "1px solid #E1E8E5", borderRadius: 14, padding: 18, marginBottom: 16 };
+  const panelTitle = { fontSize: 14, fontWeight: 700, color: "#1B2B2E", marginBottom: 12 };
+
+  const reagentById = {};
+  (reagents || []).forEach((r) => { reagentById[r.id] = { name: r.name, device: r.device, unit: r.unit }; });
+
+  const expiringList = groups.filter((g) => g.expiringSoon).sort((a, b) => new Date(a.fefo.expiry_date || 0) - new Date(b.fefo.expiry_date || 0)).slice(0, 8);
+  const lowStockList = groups.filter((g) => g.lowStock).slice(0, 8);
+  const predictedList = groups.filter((g) => g.predictedDaysLeft !== null && g.predictedDaysLeft <= 14).sort((a, b) => a.predictedDaysLeft - b.predictedDaysLeft).slice(0, 8);
+  const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
+
+  const term = search.trim().toLowerCase();
+  let filteredGroups = term
+    ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.items.some((i) => i.lot_number.toLowerCase().includes(term)))
+    : groups;
+  if (deptFilter !== "all") filteredGroups = filteredGroups.filter((g) => g.department === deptFilter);
+  filteredGroups = [...filteredGroups].sort((a, b) => a.name.localeCompare(b.name));
+
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F3F2", fontFamily: "'Inter', sans-serif", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: "#F0F3F2", fontFamily: "'Inter', sans-serif", padding: "40px 16px" }}>
+      <div style={{ maxWidth: 760, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
           <div style={{ background: "#1B2B2E", borderRadius: 8, padding: 8 }}>
             <Beaker size={20} color="#5FBFB0" />
@@ -770,7 +810,83 @@ function PublicSummaryPage({ groups, counts }) {
           ))}
         </div>
 
-        <div style={{ fontSize: 11.5, color: "#8A9694", textAlign: "center" }}>
+        <div style={cardStyle}>
+          <div style={panelTitle}>Expiring soon</div>
+          {expiringList.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>Nothing expiring soon.</div>}
+          {expiringList.map((g) => (
+            <div key={g.key} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
+              <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{g.name}</span>
+              <span style={{ color: "#8A9694" }}>{g.fefo.expiry_date}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={cardStyle}>
+          <div style={panelTitle}>Low stock</div>
+          {lowStockList.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>Nothing low on stock.</div>}
+          {lowStockList.map((g) => (
+            <div key={g.key} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
+              <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{g.name}</span>
+              <span style={{ color: "#8A9694" }}>{g.totalQty} {g.unit} left</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={cardStyle}>
+          <div style={panelTitle}>Predicted to run low (next 14 days)</div>
+          {predictedList.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>Nothing predicted to run low soon.</div>}
+          {predictedList.map((g) => (
+            <div key={g.key} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
+              <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{g.name}</span>
+              <span style={{ color: "#EA580C" }}>~{g.predictedDaysLeft}d left</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={cardStyle}>
+          <div style={panelTitle}>Recent usage</div>
+          {recentUsage.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No consumption logged yet.</div>}
+          {recentUsage.map((l) => {
+            const r = reagentById[l.reagent_id];
+            return (
+              <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
+                <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{r ? r.name : "Unknown"}</span>
+                <span style={{ color: "#8A9694" }}>{l.amount} {r ? r.unit : ""} · {l.date}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={cardStyle}>
+          <div style={panelTitle}>All reagents ({filteredGroups.length})</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <input
+              placeholder="Search name or lot…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ flex: 1, minWidth: 160, border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px 10px", fontSize: 13 }}
+            />
+            <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} style={{ border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px 10px", fontSize: 13 }}>
+              <option value="all">All departments</option>
+              {(departments || []).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          {filteredGroups.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No matches.</div>}
+          {filteredGroups.map((g) => {
+            const m = STATUS_META[g.status];
+            return (
+              <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid #EEF2F0" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1B2B2E" }}>{g.name}</div>
+                  <div style={{ fontSize: 11.5, color: "#8A9694" }}>{g.department}{g.device ? ` · ${g.device}` : ""} · {g.totalQty} {g.unit}</div>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{m.label}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ fontSize: 11.5, color: "#8A9694", textAlign: "center", marginTop: 8 }}>
           This is a shared read-only summary link — no login required, no data can be changed from here.
         </div>
       </div>

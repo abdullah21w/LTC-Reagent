@@ -147,6 +147,17 @@ create table if not exists low_stock_snoozes (
   unique (reagent_name, device)
 );
 
+-- One row per login, recording exactly which reagent+device groups were
+-- Critical / Low stock at that moment, so the next login can compare
+-- precisely instead of guessing from dates.
+create table if not exists login_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  username text not null,
+  critical_keys jsonb not null default '[]'::jsonb,
+  low_stock_keys jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 alter table reagents enable row level security;
 alter table consumption_logs enable row level security;
 alter table app_config enable row level security;
@@ -156,6 +167,7 @@ alter table audit_log enable row level security;
 alter table devices enable row level security;
 alter table lot_to_lot_pending enable row level security;
 alter table low_stock_snoozes enable row level security;
+alter table login_snapshots enable row level security;
 
 create policy "allow all reagents" on reagents for all using (true) with check (true);
 create policy "allow all consumption_logs" on consumption_logs for all using (true) with check (true);
@@ -166,6 +178,7 @@ create policy "allow all audit_log" on audit_log for all using (true) with check
 create policy "allow all devices" on devices for all using (true) with check (true);
 create policy "allow all lot_to_lot_pending" on lot_to_lot_pending for all using (true) with check (true);
 create policy "allow all low_stock_snoozes" on low_stock_snoozes for all using (true) with check (true);
+create policy "allow all login_snapshots" on login_snapshots for all using (true) with check (true);
 
 -- Note: this is an open (RLS "allow all") setup — fine for an internal lab tool
 -- with no patient data. Anyone with the app link and Supabase keys can read/write.
