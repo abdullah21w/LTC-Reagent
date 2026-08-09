@@ -158,6 +158,13 @@ create table if not exists login_snapshots (
   created_at timestamptz not null default now()
 );
 
+-- One row per time the public read-only link is opened. No personal data —
+-- just a timestamp, so the Owner can see whether the link is actually used.
+create table if not exists public_view_visits (
+  id uuid primary key default gen_random_uuid(),
+  viewed_at timestamptz not null default now()
+);
+
 alter table reagents enable row level security;
 alter table consumption_logs enable row level security;
 alter table app_config enable row level security;
@@ -168,6 +175,7 @@ alter table devices enable row level security;
 alter table lot_to_lot_pending enable row level security;
 alter table low_stock_snoozes enable row level security;
 alter table login_snapshots enable row level security;
+alter table public_view_visits enable row level security;
 
 create policy "allow all reagents" on reagents for all using (true) with check (true);
 create policy "allow all consumption_logs" on consumption_logs for all using (true) with check (true);
@@ -179,6 +187,7 @@ create policy "allow all devices" on devices for all using (true) with check (tr
 create policy "allow all lot_to_lot_pending" on lot_to_lot_pending for all using (true) with check (true);
 create policy "allow all low_stock_snoozes" on low_stock_snoozes for all using (true) with check (true);
 create policy "allow all login_snapshots" on login_snapshots for all using (true) with check (true);
+create policy "allow all public_view_visits" on public_view_visits for all using (true) with check (true);
 
 -- Note: this is an open (RLS "allow all") setup — fine for an internal lab tool
 -- with no patient data. Anyone with the app link and Supabase keys can read/write.

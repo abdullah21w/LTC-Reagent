@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -102,7 +102,22 @@ const STATUS_META = {
 const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true, discard: true };
 const DEFAULT_NEW_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
 
+const SESSION_MAX_MS = 12 * 60 * 60 * 1000; // 12 hours
+
 export default function App() {
+  // If the stored session is missing or older than 12 hours, clear it so the
+  // Login screen shows again — this is what makes the Activity log actually
+  // reflect real sessions instead of one login staying valid forever.
+  const sessionAt = localStorage.getItem("reagent_session_at");
+  const sessionValid = sessionAt && (Date.now() - Number(sessionAt) <= SESSION_MAX_MS);
+  if (!sessionValid) {
+    localStorage.removeItem("reagent_role");
+    localStorage.removeItem("reagent_username");
+    localStorage.removeItem("reagent_perms");
+    localStorage.removeItem("reagent_account_id");
+    localStorage.removeItem("reagent_session_at");
+  }
+
   const [config, setConfig] = useState(null);
   const [role, setRole] = useState(() => localStorage.getItem("reagent_role") || null);
   const [username, setUsername] = useState(() => localStorage.getItem("reagent_username") || "");
@@ -189,6 +204,7 @@ export default function App() {
     localStorage.setItem("reagent_role", newRole);
     localStorage.setItem("reagent_username", newUsername);
     localStorage.setItem("reagent_perms", JSON.stringify(effectivePerms));
+    localStorage.setItem("reagent_session_at", String(Date.now()));
     if (newAccountId) localStorage.setItem("reagent_account_id", newAccountId);
     else localStorage.removeItem("reagent_account_id");
     setRole(newRole);
@@ -238,6 +254,7 @@ export default function App() {
     localStorage.removeItem("reagent_username");
     localStorage.removeItem("reagent_perms");
     localStorage.removeItem("reagent_account_id");
+    localStorage.removeItem("reagent_session_at");
     setRole(null);
     setUsername("");
     setPerms(null);
@@ -676,6 +693,11 @@ export default function App() {
           .topbar-date { display: none; }
           .main-content { padding-left: 14px !important; padding-right: 14px !important; }
         }
+        @media print {
+          .sidebar-desktop, .topbar-noprint, .no-print { display: none !important; }
+          .main-content { padding: 0 !important; max-width: none !important; }
+          body, .main-content { background: #fff !important; }
+        }
       `}</style>
 
       {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.4)", zIndex: 60 }} />}
@@ -761,6 +783,9 @@ export default function App() {
 }
 
 function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
+  useEffect(() => {
+    supabase.from("public_view_visits").insert({});
+  }, []);
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
 
@@ -791,7 +816,7 @@ function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
           </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 16, color: "#1B2B2E" }}>LTC Lab Inventory</div>
-            <div style={{ fontSize: 12, color: "#7B8E8A" }}>Read-only overview · updates live</div>
+            <div style={{ fontSize: 12, color: "#7B8E8A" }}>Read-only overview · refresh page for latest data</div>
           </div>
         </div>
 
@@ -977,7 +1002,7 @@ function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
   const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const initial = (username || "?").charAt(0).toUpperCase();
   return (
-    <div style={{ background: THEME.cardBg, borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
+    <div className="topbar-noprint" style={{ background: THEME.cardBg, borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
       <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
           <button className="sidebar-mobile-toggle" onClick={onMenuClick} style={{ display: "none", background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text, flexShrink: 0 }}>
@@ -1477,13 +1502,20 @@ function HistoryPage({ reagents, logs }) {
 
   return (
     <div>
-      <input
-        placeholder="Search a reagent name…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        autoComplete="off"
-        style={{ width: "100%", border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 12 }}
-      />
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <input
+          placeholder="Search a reagent name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          autoComplete="off"
+          style={{ flex: 1, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", marginBottom: 12 }}
+        />
+        {matchedName && (
+          <button onClick={() => window.print()} className="no-print" title="Print this reagent's history" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 12px", color: THEME.text, flexShrink: 0 }}>
+            <Printer size={16} />
+          </button>
+        )}
+      </div>
 
       {matchedName && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
@@ -1641,7 +1673,10 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
         <button onClick={() => changeMonth(-1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronLeft size={16} /></button>
         <div style={{ fontSize: 16, fontWeight: 700, color: THEME.text }}>{monthLabel}</div>
-        <button onClick={() => changeMonth(1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronRight size={16} /></button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => window.print()} className="no-print" title="Print this month" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><Printer size={16} /></button>
+          <button onClick={() => changeMonth(1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronRight size={16} /></button>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
@@ -1721,8 +1756,13 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: THEME.textMuted, marginBottom: 20 }}>
-        Based on each reagent's actual usage rate (last 30 days) and a target coverage of <b>{coverageDays} days</b> — change this in Settings.
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, color: THEME.textMuted }}>
+          Based on each reagent's actual usage rate (last 30 days) and a target coverage of <b>{coverageDays} days</b> — change this in Settings.
+        </div>
+        <button onClick={() => window.print()} className="no-print" title="Print this list" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "8px 10px", color: THEME.text, flexShrink: 0 }}>
+          <Printer size={16} />
+        </button>
       </div>
 
       <Panel title={`Suggested reorders (${suggestions.length})`}>

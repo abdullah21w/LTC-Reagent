@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Trash2, Plus, Save, RefreshCw, Pencil, Download } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { hashPassword } from "./passwordUtils";
@@ -96,6 +96,13 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   const [msg, setMsg] = useState("");
   const [maintMsg, setMaintMsg] = useState("");
   const [reportMonth, setReportMonth] = useState(new Date().getMonth() + 1);
+  const [visitStats, setVisitStats] = useState({ count: 0, last: null });
+
+  useEffect(() => {
+    supabase.from("public_view_visits").select("viewed_at").order("viewed_at", { ascending: false }).then(({ data }) => {
+      if (data) setVisitStats({ count: data.length, last: data[0] ? data[0].viewed_at : null });
+    });
+  }, []);
   const [reportYear, setReportYear] = useState(new Date().getFullYear());
 
   function addAlertDay() {
@@ -504,6 +511,9 @@ export default function Settings({ config, presets, role, staffAccounts, devices
                 {typeof window !== "undefined" ? window.location.origin : ""}/?public={creds.public_view_token}
               </div>
             )}
+            <div style={{ fontSize: 11.5, color: "#8A9694" }}>
+              Opened <b>{visitStats.count}</b> time{visitStats.count === 1 ? "" : "s"} total{visitStats.last ? ` · last opened ${new Date(visitStats.last).toLocaleString()}` : ""}
+            </div>
             <button
               type="button"
               onClick={() => setCreds((c) => ({ ...c, public_view_token: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) }))}
