@@ -52,6 +52,18 @@ function isExpiringSoonItem(item, warnDays) {
 // Sorts lots for FEFO use: dated lots first (soonest expiry first), then
 // undated lots ordered oldest-received first (FIFO) since there's no expiry
 // to prioritize by.
+// Normalizes a name for comparison: strips invisible unicode characters
+// (zero-width spaces, bidi marks — easy to pick up by accident when typing
+// with a mixed Arabic/English keyboard), trims, lowercases, and collapses
+// repeated whitespace. Prevents "looks identical but doesn't match" search bugs.
+function normalizeName(s) {
+  return (s || "")
+    .replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function compareLots(a, b) {
   const aHas = !!a.expiry_date, bHas = !!b.expiry_date;
   if (aHas && bHas) return new Date(a.expiry_date) - new Date(b.expiry_date);
@@ -107,6 +119,7 @@ export default function App() {
   const [activityLog, setActivityLog] = useState([]);
   const [lotToLotPending, setLotToLotPending] = useState([]);
   const [snoozes, setSnoozes] = useState([]);
+  const [loginSummary, setLoginSummary] = useState(null);
   const [lotToLotNotice, setLotToLotNotice] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [showWizard, setShowWizard] = useState(false);
@@ -182,6 +195,20 @@ export default function App() {
     setUsername(newUsername);
     setPerms(effectivePerms);
     setAccountId(newAccountId || null);
+
+    // "What changed since your last login" — compare against this user's
+    // previous login event (already in activityLog, since this new one
+    // hasn't been recorded yet at this point).
+    const myPastLogins = (activityLog || [])
+      .filter((e) => e.action === "login" && e.performed_by === newUsername)
+      .sort((a, b) => new Date(b.performed_at) - new Date(a.performed_at));
+    if (myPastLogins[0]) {
+      const since = myPastLogins[0].performed_at.slice(0, 10);
+      const received = (reagents || []).filter((r) => r.date_added >= since).length;
+      const used = (logs || []).filter((l) => !l.deleted && l.date >= since).length;
+      setLoginSummary({ since, received, used, critical: counts.red, lowStock: counts.lowStock });
+    }
+
     logActivity("login", "user", `${newUsername} (${newRole === "owner" ? "Owner" : "Staff"}) signed in`, newUsername);
     const order = ["dashboard", "reports", "charts", "settings"];
     const firstTab = order.find((t) => newRole === "owner" || effectivePerms[t]) || "dashboard";
@@ -220,7 +247,7 @@ export default function App() {
   async function addReagent(entry) {
     if (!can("receive")) return;
     await supabase.from("reagents").insert({
-      name: entry.name,
+      name: (entry.name || "").replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, "").trim(),
       department: entry.department,
       item_type: entry.itemType,
       device: entry.device || "",
@@ -576,6 +603,12 @@ export default function App() {
   if (!config || reagents === null || logs === null) {
     return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "IBM Plex Mono, monospace", color: "#4A5A5C" }}>Loading…</div>;
   }
+
+  const urlToken = new URLSearchParams(window.location.search).get("public");
+  if (urlToken && config.public_view_enabled && config.public_view_token && urlToken === config.public_view_token) {
+    return <PublicSummaryPage groups={groups} counts={counts} />;
+  }
+
   if (!role) return <Login config={config} staffAccounts={staffAccounts} onLogin={handleLogin} />;
 
   return (
@@ -660,6 +693,17 @@ export default function App() {
               <button onClick={() => setLotToLotNotice(null)} style={{ background: "none", border: "none", color: "#3730A3" }}><X size={16} /></button>
             </div>
           )}
+          {loginSummary && (
+            <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+              <History size={18} color="#0F7173" />
+              <div style={{ flex: 1, fontSize: 13.5, color: "#0F5F5B" }}>
+                Since your last login ({loginSummary.since}): <b>{loginSummary.received}</b> received, <b>{loginSummary.used}</b> used
+                {loginSummary.critical > 0 && <> · <b style={{ color: "#C1432B" }}>{loginSummary.critical} critical</b></>}
+                {loginSummary.lowStock > 0 && <> · <b style={{ color: "#B8860B" }}>{loginSummary.lowStock} low stock</b></>}
+              </div>
+              <button onClick={() => setLoginSummary(null)} style={{ background: "none", border: "none", color: "#0F5F5B" }}><X size={16} /></button>
+            </div>
+          )}
 
           {tab === "dashboard" && can("dashboard") && <Dashboard groups={groups} counts={counts} devices={devices} logs={logs} reagents={reagents} departments={config.departments || []} role={role} can={can} onDeleteReagent={deleteReagent} onDiscardReagent={setDiscardReagentTarget} onSelect={(g) => { setSelectedGroup(g); setTab("detail"); }} onViewDevices={() => setTab("devices")} onSnooze={snoozeLowStock} onUnsnooze={unsnoozeLowStock} />}
           {tab === "detail" && can("dashboard") && selectedGroup && (
@@ -687,12 +731,49 @@ export default function App() {
       </div>
 
       {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
-      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
+      {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} presets={presets} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {discardReagentTarget && <DiscardModal reagent={discardReagentTarget} onClose={() => setDiscardReagentTarget(null)} onDiscard={discardReagent} />}
       {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
       {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#DC2626", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
+    </div>
+  );
+}
+
+function PublicSummaryPage({ groups, counts }) {
+  return (
+    <div style={{ minHeight: "100vh", background: "#F0F3F2", fontFamily: "'Inter', sans-serif", padding: "40px 20px" }}>
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+          <div style={{ background: "#1B2B2E", borderRadius: 8, padding: 8 }}>
+            <Beaker size={20} color="#5FBFB0" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: "#1B2B2E" }}>LTC Lab Inventory</div>
+            <div style={{ fontSize: 12, color: "#7B8E8A" }}>Read-only overview · updates live</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+          {[
+            { label: "Total reagents", value: groups.length, color: "#0F7173", bg: "#E4F4F1" },
+            { label: "Critical", value: counts.red, color: "#C1432B", bg: "#FBEAE6" },
+            { label: "Low stock", value: counts.lowStock, color: "#EA580C", bg: "#FFF7ED" },
+            { label: "Expiring soon", value: counts.expiringSoon, color: "#DC2626", bg: "#FEF2F2" },
+            { label: "Stable", value: counts.green, color: "#2F6B4F", bg: "#E8F2EC" },
+          ].map((s) => (
+            <div key={s.label} style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 12, padding: 18, flex: "1 1 140px", minWidth: 140 }}>
+              <div style={{ width: 38, height: 38, borderRadius: "50%", background: s.bg, color: s.color, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, marginBottom: 10 }}>{s.value}</div>
+              <div style={{ fontSize: 12.5, color: "#7B8E8A" }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 11.5, color: "#8A9694", textAlign: "center" }}>
+          This is a shared read-only summary link — no login required, no data can be changed from here.
+        </div>
+      </div>
     </div>
   );
 }
@@ -1255,9 +1336,9 @@ function HistoryPage({ reagents, logs }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const allNames = [...new Set((reagents || []).map((r) => r.name))].sort();
-  const term = search.trim().toLowerCase();
-  const matchedName = allNames.find((n) => n.toLowerCase() === term) || null;
-  const suggestions = term && !matchedName ? allNames.filter((n) => n.toLowerCase().includes(term)).slice(0, 8) : [];
+  const term = normalizeName(search);
+  const matchedName = allNames.find((n) => normalizeName(n) === term) || null;
+  const suggestions = term && !matchedName ? allNames.filter((n) => normalizeName(n).includes(term)).slice(0, 8) : [];
 
   let lots = matchedName
     ? reagents.filter((r) => r.name === matchedName).sort(compareLots)
@@ -2025,7 +2106,8 @@ function Modal({ title, onClose, children }) {
 const inputStyle = { width: "100%", border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 16, marginTop: 4, boxSizing: "border-box" };
 const labelStyle = { fontSize: 12.5, fontWeight: 600, color: "#516361" };
 
-function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onSubmit }) {
+function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onClose, onSubmit }) {
+  const [showPrep, setShowPrep] = useState(false);
   const [typeFilter, setTypeFilter] = useState("");
   const filteredReagents = typeFilter ? reagents.filter((r) => r.item_type === typeFilter) : reagents;
   const names = [...new Set(filteredReagents.map((r) => r.name))];
@@ -2063,6 +2145,7 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
     const opts = [...new Set(reagents.filter((r) => r.name === newName).map((r) => r.device || ""))];
     setDevice(opts[0] || "");
     setSelectedLotId("");
+    setShowPrep(false);
   }
 
   function changeDevice(newDevice) {
@@ -2136,6 +2219,18 @@ function LogConsumptionModal({ reagents, username, lotToLotPending, onClose, onS
           </label>
         )}
         {name && !fefo && <div style={{ fontSize: 12.5, color: "#C1432B" }}>No stock of "{name}" on this device.</div>}
+        {(() => {
+          const matchingPreset = (presets || []).find((p) => p.name === name && p.prep_instructions);
+          if (!matchingPreset) return null;
+          return (
+            <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 7, padding: "10px 12px" }}>
+              <button type="button" onClick={() => setShowPrep(!showPrep)} style={{ background: "none", border: "none", color: "#3730A3", fontSize: 12.5, fontWeight: 600, padding: 0 }}>
+                {showPrep ? "Hide" : "View"} preparation instructions for {name}
+              </button>
+              {showPrep && <div style={{ fontSize: 12.5, color: "#3730A3", marginTop: 8, whiteSpace: "pre-wrap" }}>{matchingPreset.prep_instructions}</div>}
+            </div>
+          );
+        })()}
         {lots.length > 0 && (
           <label style={labelStyle}>Lot to use
             <select style={inputStyle} value={chosenLot ? chosenLot.id : ""} onChange={(e) => setSelectedLotId(e.target.value)}>

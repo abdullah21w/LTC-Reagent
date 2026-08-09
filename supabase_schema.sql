@@ -74,6 +74,8 @@ create table if not exists app_config (
   owner_2fa_code text,
   owner_2fa_code_expires timestamptz,
   reorder_coverage_days int not null default 30,
+  public_view_enabled boolean not null default false,
+  public_view_token text not null default '',
   departments jsonb not null default '["Chemistry","Hematology","Blood Bank","Microbiology"]'::jsonb
 );
 
@@ -90,6 +92,7 @@ create table if not exists reagent_presets (
   name text not null,
   department text not null,
   unit text not null default 'mL',
+  prep_instructions text,
   created_at timestamptz default now()
 );
 

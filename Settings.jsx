@@ -67,9 +67,9 @@ function StaffAccountRow({ account, onSave, onRemove }) {
 
 export default function Settings({ config, presets, role, staffAccounts, devices, reload, onRunMaintenance }) {
   const departments = config.departments || [];
-  const [newPreset, setNewPreset] = useState({ name: "", department: departments[0] || "", unit: "mL" });
+  const [newPreset, setNewPreset] = useState({ name: "", department: departments[0] || "", unit: "mL", prep_instructions: "" });
   const [editPresetId, setEditPresetId] = useState(null);
-  const [editPresetForm, setEditPresetForm] = useState({ name: "", department: "", unit: "" });
+  const [editPresetForm, setEditPresetForm] = useState({ name: "", department: "", unit: "", prep_instructions: "" });
   const [newDept, setNewDept] = useState("");
   const [newDevice, setNewDevice] = useState({ name: "", department: departments[0] || "" });
   const [newStaff, setNewStaff] = useState({ username: "", password: "", permissions: { ...BLANK_PERMISSIONS } });
@@ -88,6 +88,8 @@ export default function Settings({ config, presets, role, staffAccounts, devices
     monthly_report_email: config.monthly_report_email || "",
     owner_2fa_enabled: config.owner_2fa_enabled || false,
     owner_2fa_email: config.owner_2fa_email || "",
+    public_view_enabled: config.public_view_enabled || false,
+    public_view_token: config.public_view_token || "",
   });
   const [alertDays, setAlertDays] = useState(() => (config.expiry_alert_days && config.expiry_alert_days.length ? config.expiry_alert_days : [3, 1]));
   const [newAlertDay, setNewAlertDay] = useState("");
@@ -148,7 +150,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   async function addPreset() {
     if (!newPreset.name) return;
     await supabase.from("reagent_presets").insert(newPreset);
-    setNewPreset({ name: "", department: departments[0] || "", unit: "mL" });
+    setNewPreset({ name: "", department: departments[0] || "", unit: "mL", prep_instructions: "" });
     reload();
   }
 
@@ -159,7 +161,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
 
   function startEditPreset(p) {
     setEditPresetId(p.id);
-    setEditPresetForm({ name: p.name, department: p.department, unit: p.unit });
+    setEditPresetForm({ name: p.name, department: p.department, unit: p.unit, prep_instructions: p.prep_instructions || "" });
   }
 
   async function saveEditPreset() {
@@ -250,6 +252,13 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             <Plus size={14} /> Add
           </button>
         </div>
+        <textarea
+          placeholder="Preparation instructions (optional) — shown as a link when staff log use of this reagent"
+          value={newPreset.prep_instructions}
+          onChange={(e) => setNewPreset((p) => ({ ...p, prep_instructions: e.target.value }))}
+          rows={2}
+          style={{ ...inputStyle, width: "100%", marginTop: 8, resize: "vertical", fontFamily: "inherit" }}
+        />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 30 }}>
@@ -277,10 +286,20 @@ export default function Settings({ config, presets, role, staffAccounts, devices
               />
               <button onClick={saveEditPreset} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "0 12px", fontWeight: 700, fontSize: 13, height: 38 }}>Save</button>
               <button onClick={() => setEditPresetId(null)} style={{ background: "none", border: "1px solid #C7D1CE", color: "#516361", borderRadius: 7, padding: "0 12px", fontSize: 13, height: 38 }}>Cancel</button>
+              <textarea
+                placeholder="Preparation instructions (optional)"
+                value={editPresetForm.prep_instructions}
+                onChange={(e) => setEditPresetForm((f) => ({ ...f, prep_instructions: e.target.value }))}
+                rows={2}
+                style={{ ...inputStyle, width: "100%", marginTop: 4, resize: "vertical", fontFamily: "inherit" }}
+              />
             </div>
           ) : (
             <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "9px 14px" }}>
-              <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
+              <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                {p.name}
+                {p.prep_instructions && <span title="Has preparation instructions" style={{ fontSize: 10, fontWeight: 700, color: "#0F7173", background: "#E4F4F1", borderRadius: 4, padding: "2px 6px" }}>PREP</span>}
+              </div>
               <div style={{ fontSize: 12.5, color: "#7B8E8A" }}>{p.department} · {p.unit}</div>
               <button onClick={() => startEditPreset(p)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={15} /></button>
               <button onClick={() => deletePreset(p.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={15} /></button>
@@ -467,6 +486,33 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             {config.backup_last_sent && <div style={{ fontSize: 11.5, color: "#8A9694" }}>Last backup sent: {config.backup_last_sent}</div>}
             <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save backup settings
+            </button>
+            {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
+          </div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3, marginTop: 30 }}>PUBLIC READ-ONLY LINK</div>
+          <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
+            A link anyone can open to see a live summary (Critical / Low stock / Expiring / Stable counts) without logging in — nothing can be changed from it. Share it with management, no account needed.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+              <input type="checkbox" checked={creds.public_view_enabled} onChange={(e) => setCreds((c) => ({ ...c, public_view_enabled: e.target.checked }))} />
+              Enable the public link
+            </label>
+            {creds.public_view_token && (
+              <div style={{ fontSize: 12, color: "#516361", background: "#F7F9F8", border: "1px solid #E1E8E5", borderRadius: 6, padding: "8px 10px", wordBreak: "break-all" }}>
+                {typeof window !== "undefined" ? window.location.origin : ""}/?public={creds.public_view_token}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setCreds((c) => ({ ...c, public_view_token: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) }))}
+              style={{ background: "none", border: "1px solid #C7D1CE", color: "#516361", borderRadius: 7, padding: "8px 12px", fontSize: 13, fontWeight: 600, alignSelf: "flex-start" }}
+            >
+              {creds.public_view_token ? "Generate new link (invalidates the old one)" : "Generate link"}
+            </button>
+            <button onClick={saveCreds} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Save size={14} /> Save
             </button>
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>
