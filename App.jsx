@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer, CheckCircle2 } from "lucide-react";
+import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -14,6 +15,18 @@ function deptColor(dept, list) {
   return DEPT_PALETTE[i % DEPT_PALETTE.length];
 }
 const INSPECTION_KEYS = ["intact_container", "complete_compound", "expiration_validity", "lot_matches_kit", "storage_condition_ok"];
+
+// Colors for the client-side "Full report" PDF export (Reports page) — same
+// palette as the server-side monthly report in api/_reportBuilder.js, kept
+// as a separate literal copy since that file ships to a Vercel function and
+// can't share an import with the Vite-bundled frontend.
+const REPORT_TEAL = "#0F7173";
+const REPORT_NAVY = "#1B2B2E";
+const REPORT_MUTED = "#7B8E8A";
+const REPORT_RED = "#C1432B";
+const REPORT_AMBER = "#B8860B";
+const REPORT_BORDER = "#E1E8E5";
+const REPORT_STRIPE = "#F7F9F8";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
@@ -1061,12 +1074,24 @@ function Panel({ title, action, children }) {
   );
 }
 
-function GaugeBar({ pct, color }) {
+function DeptPill({ active, onClick, label, color }) {
   return (
-    <div style={{ width: 44, height: 64, border: `1.5px solid ${THEME.cardBorder}`, borderRadius: 5, position: "relative", overflow: "hidden", background: THEME.cardBg, flexShrink: 0 }}>
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${Math.min(100, Math.max(3, pct))}%`, background: color, transition: "height .3s" }} />
-      <div style={{ position: "absolute", top: 4, left: 0, right: 0, textAlign: "center", fontSize: 9, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(pct)}%</div>
-    </div>
+    <button
+      onClick={onClick}
+      style={{
+        flexShrink: 0,
+        background: active ? color : THEME.cardBg,
+        color: active ? "#fff" : THEME.text,
+        border: `1px solid ${active ? color : THEME.cardBorder}`,
+        borderRadius: 20,
+        padding: "7px 14px",
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -1076,6 +1101,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
   const [deviceFilter, setDeviceFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [snoozingKey, setSnoozingKey] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set());
 
   if (groups.length === 0) {
     return (
@@ -1087,10 +1113,21 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
     );
   }
 
+  function toggleExpand(key) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function lastLogFor(g) {
+    const ids = new Set(g.items.map((i) => i.id));
+    return [...(logs || [])].filter((l) => !l.deleted && ids.has(l.reagent_id)).sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
+  }
+
   const allDevices = [...new Set(groups.map((g) => g.device).filter(Boolean))].sort();
 
-  const expiringList = groups.filter((g) => g.expiringSoon).sort((a, b) => new Date(a.fefo.expiry_date || 0) - new Date(b.fefo.expiry_date || 0)).slice(0, 5);
-  const lowStockList = groups.filter((g) => g.lowStock).slice(0, 5);
   const recentUsage = [...(logs || [])].filter((l) => !l.deleted).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   const reagentById = {};
   (reagents || []).forEach((i) => { reagentById[i.id] = { name: i.name, device: i.device, unit: i.unit }; });
@@ -1112,6 +1149,27 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
   });
   const mostUsedList = Object.entries(mostUsedMap).map(([name, qty]) => ({ name, qty, unit: groups.find((g) => g.name === name)?.unit || "" })).sort((a, b) => b.qty - a.qty).slice(0, 5);
 
+  const snoozedGroups = groups.filter((g) => g.snoozedUntil);
+
+  const pulseData = [];
+  {
+    const byDate = {};
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const iso = d.toISOString().slice(0, 10);
+      const entry = { date: iso, label: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), total: 0 };
+      byDate[iso] = entry;
+      pulseData.push(entry);
+    }
+    (logs || []).forEach((l) => {
+      if (l.deleted) return;
+      const entry = byDate[l.date];
+      if (entry) entry.total += Number(l.amount || 0);
+    });
+  }
+  const pulseTotal = pulseData.reduce((s, d) => s + d.total, 0);
+
   const term = search.trim().toLowerCase();
   let filteredGroups = term
     ? groups.filter((g) => g.name.toLowerCase().includes(term) || g.fefo.lot_number.toLowerCase().includes(term) || g.device.toLowerCase().includes(term))
@@ -1130,40 +1188,47 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCardV2 icon={<Beaker size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
-        <StatCardV2 icon={<AlertTriangle size={20} />} iconBg="#FFF7ED" iconColor="#EA580C" value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
-        <StatCardV2 icon={<Clock size={20} />} iconBg="#FEF2F2" iconColor="#DC2626" value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
-        <StatCardV2 icon={<Cpu size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={(devices || []).length} label="Connected devices" />
+      <div style={{ display: "flex", alignItems: "center", gap: 24, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: "20px 24px", marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 150 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 6 }}>14-day activity</div>
+          <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{pulseTotal}</div>
+          <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 2 }}>units consumed, all departments</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 220, height: 64 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={pulseData} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
+              <defs>
+                <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#0F7173" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#0F7173" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Tooltip
+                formatter={(v) => [`${v} units`, "Used"]}
+                labelFormatter={(_, p) => (p && p[0] ? p[0].payload.label : "")}
+                contentStyle={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, fontSize: 12 }}
+              />
+              <Area type="monotone" dataKey="total" stroke="#0F7173" strokeWidth={2} fill="url(#pulseFill)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <Panel title="Expiring soon" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("expiring")}>View all</span>}>
-          {expiringList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing expiring soon.</div>}
-          {expiringList.map((g) => {
-            const dExp = daysBetween(g.fefo.expiry_date, todayISO());
-            return (
-              <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
-                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Lot {g.fefo.lot_number}</div>
-                </div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dExp < 0 ? "#DC2626" : "#EA580C", background: dExp < 0 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px" }}>
-                    {dExp < 0 ? "Expired" : `${dExp}d left`}
-                  </span>
-                  <div style={{ fontSize: 10.5, color: THEME.textMuted, marginTop: 3 }}>{g.fefo.expiry_date}</div>
-                </div>
-              </div>
-            );
-          })}
-        </Panel>
+        <StatCardV2 icon={<Beaker size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
+        <StatCardV2 icon={<AlertTriangle size={20} />} iconBg={STATUS_META.red.bg} iconColor={STATUS_META.red.color} value={counts.red} label="Critical" active={statusFilter === "critical"} onClick={() => setStatusFilter(statusFilter === "critical" ? "all" : "critical")} />
+        <StatCardV2 icon={<TrendingDown size={20} />} iconBg={STATUS_META.low.bg} iconColor={STATUS_META.low.color} value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
+        <StatCardV2 icon={<Clock size={20} />} iconBg={STATUS_META.expiring.bg} iconColor={STATUS_META.expiring.color} value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
+        <StatCardV2 icon={<CheckCircle2 size={20} />} iconBg={STATUS_META.green.bg} iconColor={STATUS_META.green.color} value={counts.green} label="Stable" active={statusFilter === "stable"} onClick={() => setStatusFilter(statusFilter === "stable" ? "all" : "stable")} />
+        <StatCardV2 icon={<Cpu size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={(devices || []).length} label="Connected devices" />
+      </div>
 
+      <div style={{ display: "flex", gap: 16, marginBottom: 32, flexWrap: "wrap" }}>
         <Panel title="Devices" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={onViewDevices}>View all</span>}>
           {(devices || []).length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No devices added yet.</div>}
           {(devices || []).slice(0, 5).map((d) => {
             const activeLot = groups.flatMap((g) => g.items).find((i) => i.device === d.name && i.active_on_device);
-            const m = activeLot ? STATUS_META[statusOf(activeLot, 30)] : null;
+            const dm = activeLot ? STATUS_META[statusOf(activeLot, 30)] : null;
             const dExp = activeLot && activeLot.expiry_date ? daysBetween(activeLot.expiry_date, todayISO()) : null;
             return (
               <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
@@ -1173,92 +1238,32 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                 </div>
                 {activeLot && (
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px" }}>
+                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dm.color, background: dm.bg, borderRadius: 6, padding: "3px 8px" }}>
                       {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
                     </span>
-                    {activeLot.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, marginTop: 3 }}>{activeLot.expiry_date}</div>}
                   </div>
                 )}
               </div>
             );
           })}
         </Panel>
-      </div>
-
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <Panel title="Low stock" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => setStatusFilter("low")}>View all</span>}>
-          {lowStockList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing low on stock.</div>}
-          {lowStockList.map((g) => (
-            <div key={g.key} style={{ padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                <div onClick={() => onSelect(g)} style={{ minWidth: 0, flex: 1, cursor: "pointer" }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
-                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>Min {g.fefo.low_stock_threshold} {g.unit}</div>
-                </div>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#EA580C", background: "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit).main}</span>
-                {can("edit") && (
-                  <button onClick={() => setSnoozingKey(snoozingKey === g.key ? null : g.key)} title="Snooze this alert" style={{ background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "3px 6px", color: THEME.textMuted, flexShrink: 0 }}>
-                    <Clock size={13} />
-                  </button>
-                )}
-              </div>
-              {snoozingKey === g.key && (
-                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                  {[3, 7, 14, 30].map((d) => (
-                    <button key={d} onClick={() => { onSnooze(g.name, g.device, d); setSnoozingKey(null); }} style={{ fontSize: 11.5, background: "#F0F3F2", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "4px 9px", color: THEME.text }}>{d}d</button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {groups.filter((g) => g.snoozedUntil).length > 0 && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${THEME.cardBorder}` }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: THEME.textMuted, textTransform: "uppercase", marginBottom: 6 }}>Snoozed</div>
-              {groups.filter((g) => g.snoozedUntil).map((g) => (
-                <div key={"snz-" + g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 12 }}>
-                  <div style={{ color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name} — until {g.snoozedUntil}</div>
-                  {can("edit") && <button onClick={() => onUnsnooze(g.name, g.device)} style={{ fontSize: 11, color: THEME.primary, background: "none", border: "none", fontWeight: 600, flexShrink: 0 }}>Unsnooze</button>}
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
 
         <Panel title="Recent usage">
           {recentUsage.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet.</div>}
-          {recentUsage.length > 0 && (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ textAlign: "left", color: THEME.textMuted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
-                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Reagent</th>
-                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Used by</th>
-                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Device</th>
-                    <th style={{ padding: "0 8px 8px 0", fontWeight: 600 }}>Date</th>
-                    <th style={{ padding: "0 0 8px 0", fontWeight: 600, textAlign: "right" }}>Qty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentUsage.map((l) => {
-                    const r = reagentById[l.reagent_id] || {};
-                    return (
-                      <tr key={l.id} style={{ borderTop: `1px solid ${THEME.cardBorder}` }}>
-                        <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name || "—"}</td>
-                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.used_by}</td>
-                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
-                        <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{l.date}</td>
-                        <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 600, color: THEME.text }}>{l.amount} {r.unit || ""}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-        )}
+          {recentUsage.map((l) => {
+            const r = reagentById[l.reagent_id] || {};
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name || "—"}</div>
+                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{l.used_by} · {r.device || "—"} · {l.date}</div>
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 600, color: THEME.text, flexShrink: 0 }}>{l.amount} {r.unit || ""}</span>
+              </div>
+            );
+          })}
         </Panel>
-      </div>
 
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <Panel title="Predicted to run low" action={<span style={{ fontSize: 12, color: THEME.textMuted }}>Based on 30-day usage</span>}>
           {predictedList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing predicted to run low in the next 2 weeks, based on recent usage.</div>}
           {predictedList.map((g) => (
@@ -1267,7 +1272,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
                 <div style={{ fontSize: 11.5, color: THEME.textMuted }}>~{g.dailyRate.toFixed(1)} {g.unit}/day · {g.totalQty} {g.unit} left</div>
               </div>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: g.predictedDaysLeft <= 3 ? "#DC2626" : "#EA580C", background: g.predictedDaysLeft <= 3 ? "#FEF2F2" : "#FFF7ED", borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: g.predictedDaysLeft <= 3 ? STATUS_META.red.color : STATUS_META.expiring.color, background: g.predictedDaysLeft <= 3 ? STATUS_META.red.bg : STATUS_META.expiring.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
                 ~{g.predictedDaysLeft}d left
               </span>
             </div>
@@ -1288,14 +1293,14 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
         </Panel>
       </div>
 
-      <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "28px 0 14px" }}>All reagents</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "0 0 14px" }}>All reagents</div>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <input
           placeholder="Search reagent, lot number, or device…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: 2, minWidth: 200, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box" }}
+          style={{ flex: 2, minWidth: 200, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", background: THEME.cardBg, color: THEME.text }}
         />
         <select
           value={deviceFilter}
@@ -1320,7 +1325,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
         </div>
       )}
       {byDept.map(({ dept, items }) => (
-        <div key={dept} style={{ marginBottom: 26 }}>
+        <div key={dept} style={{ marginBottom: 22 }}>
           {activeDept === "all" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: deptColor(dept, departments) }} />
@@ -1330,84 +1335,103 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((g) => {
               const m = STATUS_META[g.status];
-              const pct = g.totalReceived > 0 ? (g.totalQty / g.totalReceived) * 100 : 0;
               const dExp = g.fefo.expiry_date ? daysBetween(g.fefo.expiry_date, todayISO()) : null;
+              const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
+              const isOpen = expanded.has(g.key);
+              const lastLog = isOpen ? lastLogFor(g) : null;
               return (
-                <div key={g.key} onClick={() => onSelect(g)} className="dash-row" style={{ display: "flex", alignItems: "center", gap: 16, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `4px solid ${m.color}`, borderRadius: 8, padding: "12px 16px", textAlign: "left", cursor: "pointer", flexWrap: "wrap" }}>
-                  <GaugeBar pct={pct} color={m.color} />
-                  <div style={{ flex: 1, minWidth: 140 }}>
-                    <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      {g.name}
-                      {g.device && (
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#0F7173", background: "#E4F4F1", borderRadius: 5, padding: "2px 6px" }}>{g.device}</span>
-                      )}
-                      {g.lowStock && (
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#B8860B", background: "#FBF3DF", borderRadius: 5, padding: "2px 6px" }}>Low stock</span>
-                      )}
-                      {g.expiringSoon && (
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8A5A2B", background: "#FBF0E4", borderRadius: 5, padding: "2px 6px" }}>Expiring soon</span>
-                      )}
-                      {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
+                <div key={g.key} className="hover-lift" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `4px solid ${m.color}`, borderRadius: 8, overflow: "hidden" }}>
+                  <div onClick={() => toggleExpand(g.key)} style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {g.name}
+                        {g.device && (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.primary, background: "#E4F4F1", borderRadius: 5, padding: "2px 6px" }}>{g.device}</span>
+                        )}
+                        {g.lowStock && (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.low.color, background: STATUS_META.low.bg, borderRadius: 5, padding: "2px 6px" }}>Low stock</span>
+                        )}
+                        {g.expiringSoon && (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.expiring.color, background: STATUS_META.expiring.bg, borderRadius: 5, padding: "2px 6px" }}>Expiring soon</span>
+                        )}
+                        {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
+                        {q.main}{q.sub && <span style={{ opacity: 0.7 }}> ({q.sub})</span>} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
+                      </div>
                     </div>
-                    <div style={{ fontSize: 12.5, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
-                      {(() => {
-                        const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
-                        return <>{q.main}{q.sub && <span style={{ opacity: 0.7 }}> ({q.sub})</span>}</>;
-                      })()} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
+                      <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
                     </div>
+                    <ChevronRight size={16} color="#B7C3C0" style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
                   </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
-                    <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
-                    {g.fefo.expiry_date && <div style={{ fontSize: 10.5, color: THEME.textMuted, opacity: 0.75, marginTop: 1 }}>{g.fefo.expiry_date}</div>}
-                  </div>
-                  {can("discard") && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDiscardReagent(g.fefo); }}
-                      title="Discard (expired/damaged)"
-                      style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}
-                    >
-                      <Ban size={15} />
-                    </button>
+                  {isOpen && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "14px 32px", padding: "4px 16px 16px", borderTop: `1px solid ${THEME.cardBorder}`, background: THEME.bg, fontSize: 12.5 }}>
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Lot</div>
+                        <div style={{ color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{g.fefo.lot_number}</div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Expires</div>
+                        <div style={{ color: THEME.text }}>{g.fefo.expiry_date || "No expiry"}</div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Quantity</div>
+                        <div style={{ color: THEME.text }}>{q.main}{q.sub && ` (${q.sub})`}</div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Last used</div>
+                        <div style={{ color: THEME.text }}>{lastLog ? `${lastLog.date} · ${lastLog.amount} ${g.unit} by ${lastLog.used_by}` : "—"}</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 14, marginLeft: "auto", marginTop: 12 }}>
+                        {can("edit") && g.lowStock && (
+                          <button onClick={(e) => { e.stopPropagation(); setSnoozingKey(snoozingKey === g.key ? null : g.key); }} style={{ background: "none", border: "none", color: THEME.textMuted, fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                            <Clock size={13} /> Snooze
+                          </button>
+                        )}
+                        {can("discard") && (
+                          <button onClick={(e) => { e.stopPropagation(); onDiscardReagent(g.fefo); }} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: STATUS_META.red.color }}>
+                            <Ban size={15} />
+                          </button>
+                        )}
+                        {can("delete") && (
+                          <button onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }} title="Remove this lot" style={{ background: "none", border: "none", color: STATUS_META.red.color }}>
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                        <button onClick={(e) => { e.stopPropagation(); onSelect(g); }} style={{ background: "none", border: "none", color: THEME.primary, fontSize: 12.5, fontWeight: 700 }}>
+                          View full detail →
+                        </button>
+                      </div>
+                      {snoozingKey === g.key && (
+                        <div style={{ display: "flex", gap: 6, width: "100%" }}>
+                          {[3, 7, 14, 30].map((d) => (
+                            <button key={d} onClick={(e) => { e.stopPropagation(); onSnooze(g.name, g.device, d); setSnoozingKey(null); }} style={{ fontSize: 11.5, background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "4px 9px", color: THEME.text }}>{d}d</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
-                  {can("delete") && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }}
-                      title="Remove this lot"
-                      style={{ background: "none", border: "none", color: "#C1432B", padding: 4 }}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  )}
-                  <ChevronRight size={16} color="#B7C3C0" />
                 </div>
               );
             })}
           </div>
         </div>
       ))}
-    </div>
-  );
-}
 
-function DeptPill({ active, onClick, label, color }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        flexShrink: 0,
-        background: active ? color : THEME.cardBg,
-        color: active ? "#fff" : THEME.text,
-        border: `1px solid ${active ? color : THEME.cardBorder}`,
-        borderRadius: 20,
-        padding: "7px 14px",
-        fontSize: 12.5,
-        fontWeight: 700,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </button>
+      {snoozedGroups.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 8 }}>Snoozed alerts</div>
+          {snoozedGroups.map((g) => (
+            <div key={"snz-" + g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px", borderBottom: `1px solid ${THEME.cardBorder}`, fontSize: 12.5 }}>
+              <span style={{ color: THEME.textMuted }}>{g.name} — until {g.snoozedUntil}</span>
+              {can("edit") && <button onClick={() => onUnsnooze(g.name, g.device)} style={{ fontSize: 12, color: THEME.primary, background: "none", border: "none", fontWeight: 600 }}>Unsnooze</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1934,6 +1958,133 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
+// Builds the "Full report" PDF (Reports page export). RP is the dynamically
+// imported @react-pdf/renderer module namespace, passed in so the library
+// only loads when someone actually clicks "Export PDF" instead of bloating
+// the initial app bundle.
+function buildReportPdfDoc(RP, { matchedLots, matchedLogs, matchedDiscards, reagentById, dateFrom, dateTo, deptLabel }) {
+  const { Document, Page, Text, View, StyleSheet } = RP;
+
+  const styles = StyleSheet.create({
+    page: { padding: 30, paddingBottom: 44, fontSize: 8, fontFamily: "Helvetica", color: REPORT_NAVY },
+    brand: { fontSize: 15, fontFamily: "Helvetica-Bold", color: REPORT_TEAL },
+    title: { fontSize: 11, fontFamily: "Helvetica-Bold", color: REPORT_NAVY, marginTop: 2 },
+    meta: { fontSize: 8, color: REPORT_MUTED, marginTop: 2 },
+    rule: { borderBottomWidth: 1, borderBottomColor: REPORT_BORDER, marginTop: 8, marginBottom: 12 },
+    sectionTitle: { fontSize: 10, fontFamily: "Helvetica-Bold", color: REPORT_NAVY, marginBottom: 6 },
+    empty: { fontSize: 8, color: REPORT_MUTED, fontStyle: "italic", marginBottom: 12 },
+    headRow: { flexDirection: "row", backgroundColor: REPORT_NAVY, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, marginBottom: 1 },
+    headCell: { fontSize: 6.5, fontFamily: "Helvetica-Bold", color: "#FFFFFF", textTransform: "uppercase" },
+    row: { flexDirection: "row", paddingVertical: 4, paddingHorizontal: 5, borderRadius: 3 },
+    stripe: { backgroundColor: REPORT_STRIPE },
+    cell: { fontSize: 7.5 },
+    footer: {
+      position: "absolute", bottom: 18, left: 30, right: 30,
+      flexDirection: "row", justifyContent: "space-between",
+      borderTopWidth: 1, borderTopColor: REPORT_BORDER, paddingTop: 5,
+      fontSize: 7, color: REPORT_MUTED,
+    },
+  });
+
+  function Table({ columns, rows }) {
+    return (
+      <View wrap>
+        <View style={styles.headRow}>
+          {columns.map((c, i) => <Text key={i} style={[styles.headCell, { width: c.width }]}>{c.label}</Text>)}
+        </View>
+        {rows.map((r, ri) => (
+          <View key={ri} style={[styles.row, ri % 2 === 1 && styles.stripe]}>
+            {columns.map((c, ci) => (
+              <Text key={ci} style={[styles.cell, { width: c.width, color: c.color ? c.color(r) : REPORT_NAVY }]}>{c.value(r)}</Text>
+            ))}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function inspectionSummary(r) {
+    const failed = INSPECTION_KEYS.filter((k) => r[k] === false);
+    return failed.length ? `${failed.length} issue(s)` : "OK";
+  }
+
+  return (
+    <Document>
+      <Page size="A4" orientation="landscape" style={styles.page} wrap>
+        <View fixed>
+          <Text style={styles.brand}>LTC Lab Inventory</Text>
+          <Text style={styles.title}>Full Report</Text>
+          <Text style={styles.meta}>{dateFrom} to {dateTo} · {deptLabel} · Generated {todayISO()}</Text>
+          <View style={styles.rule} />
+        </View>
+
+        <Text style={styles.sectionTitle}>Lots ({matchedLots.length})</Text>
+        {matchedLots.length === 0 ? (
+          <Text style={styles.empty}>No lots match this filter.</Text>
+        ) : (
+          <Table
+            columns={[
+              { label: "Reagent", width: "14%", value: (r) => r.name },
+              { label: "Dept", width: "10%", value: (r) => r.department },
+              { label: "Type", width: "9%", value: (r) => r.item_type },
+              { label: "Lot", width: "9%", value: (r) => r.lot_number },
+              { label: "Received by", width: "9%", value: (r) => r.added_by },
+              { label: "Received", width: "8%", value: (r) => r.date_added },
+              { label: "Expiry", width: "8%", value: (r) => r.expiry_date || "—" },
+              { label: "Qty recv", width: "7%", value: (r) => String(r.quantity_received) },
+              { label: "Qty left", width: "7%", value: (r) => String(r.current_quantity) },
+              { label: "Unit", width: "6%", value: (r) => r.unit },
+              { label: "Inspection", width: "7%", value: inspectionSummary, color: (r) => (INSPECTION_KEYS.some((k) => r[k] === false) ? REPORT_AMBER : REPORT_MUTED) },
+              { label: "Status", width: "6%", value: (r) => (r.deleted ? "Deleted" : "Active"), color: (r) => (r.deleted ? REPORT_RED : REPORT_MUTED) },
+            ]}
+            rows={matchedLots}
+          />
+        )}
+
+        <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Consumption log ({matchedLogs.length})</Text>
+        {matchedLogs.length === 0 ? (
+          <Text style={styles.empty}>No consumption logged for this filter.</Text>
+        ) : (
+          <Table
+            columns={[
+              { label: "Date", width: "10%", value: (l) => l.date },
+              { label: "Reagent", width: "22%", value: (l) => reagentById[l.reagent_id]?.name || "—" },
+              { label: "Lot", width: "14%", value: (l) => reagentById[l.reagent_id]?.lot_number || "—" },
+              { label: "Amount", width: "12%", value: (l) => `${l.amount} ${reagentById[l.reagent_id]?.unit || ""}` },
+              { label: "Used by", width: "18%", value: (l) => l.used_by },
+              { label: "QC tested", width: "12%", value: (l) => (l.tested_by_qc ? "Yes" : "No") },
+              { label: "Status", width: "12%", value: (l) => (l.deleted ? "Deleted" : "Active"), color: (l) => (l.deleted ? REPORT_RED : REPORT_MUTED) },
+            ]}
+            rows={matchedLogs}
+          />
+        )}
+
+        <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Discarded ({matchedDiscards.length})</Text>
+        {matchedDiscards.length === 0 ? (
+          <Text style={styles.empty}>Nothing discarded for this filter.</Text>
+        ) : (
+          <Table
+            columns={[
+              { label: "Date", width: "12%", value: (r) => (r.deleted_at || "").slice(0, 10) },
+              { label: "Reagent", width: "22%", value: (r) => r.name },
+              { label: "Lot", width: "14%", value: (r) => r.lot_number },
+              { label: "Reason", width: "16%", value: (r) => r.discard_reason || "—" },
+              { label: "Note", width: "24%", value: (r) => r.discard_note || "—" },
+              { label: "By", width: "12%", value: (r) => r.deleted_by || "—" },
+            ]}
+            rows={matchedDiscards}
+          />
+        )}
+
+        <View style={styles.footer} fixed>
+          <Text>LTC Lab Inventory — Full report</Text>
+          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+        </View>
+      </Page>
+    </Document>
+  );
+}
+
 function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onRestoreReagent, onDeleteLog, onPurgeReagent, onPurgeLog }) {
   const [viewTab, setViewTab] = useState("receive");
   const [dateFrom, setDateFrom] = useState(firstOfMonth());
@@ -1985,50 +2136,28 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onRe
     return logs.filter((l) => l.reagent_id === reagentId);
   }
 
-  async function exportExcel() {
-    const XLSX = await import("xlsx");
-    const rows = [];
-    matchedLots.forEach((r) => {
-      const rLogs = logsFor(r.id);
-      const base = {
-        Reagent: r.name,
-        Department: r.department,
-        Type: r.item_type,
-        "Lot Number": r.lot_number,
-        "Received By": r.added_by,
-        "Received Date": r.date_added,
-        "Expiry Date": r.expiry_date,
-        "Qty Received": r.quantity_received,
-        "Qty Remaining": r.current_quantity,
-        Unit: r.unit,
-        "Intact Container": r.intact_container ? "Yes" : "No",
-        "Complete Components": r.complete_compound ? "Yes" : "No",
-        "Expiration Validity": r.expiration_validity ? "Yes" : "No",
-        "Lot Matches Kit": r.lot_matches_kit ? "Yes" : "No",
-        "Storage Condition": r.storage_condition_ok ? "Yes" : "No",
-        "Receiving Note": r.receiving_notes || "",
-        "Inspection Note": r.inspection_notes || "",
-        "Lot Deleted": r.deleted ? "Yes" : "No",
-      };
-      if (rLogs.length === 0) {
-        rows.push({ ...base, "Consumption Date": "", "Amount Used": "", "Used By": "", "Tested by QC": "", "Log Deleted": "" });
-      } else {
-        rLogs.forEach((l) => {
-          rows.push({ ...base, "Consumption Date": l.date, "Amount Used": l.amount, "Used By": l.used_by, "Tested by QC": l.tested_by_qc ? "Yes" : "No", "Log Deleted": l.deleted ? "Yes" : "No" });
-        });
-      }
+  async function exportPdf() {
+    const RP = await import("@react-pdf/renderer");
+    const doc = buildReportPdfDoc(RP, {
+      matchedLots, matchedLogs, matchedDiscards, reagentById,
+      dateFrom, dateTo, deptLabel: deptFilter || "All departments",
     });
-    const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No records match this filter." }]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, "Report");
-    XLSX.writeFile(wb, `reagent-report-${dateFrom}-to-${dateTo}.xlsx`);
+    const blob = await RP.pdf(doc).toBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `reagent-report-${dateFrom}-to-${dateTo}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <h2 style={{ fontSize: 20, fontWeight: 700 }}>Full report</h2>
-        <button onClick={exportExcel} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "8px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Download size={14} /> Export Excel</button>
+        <button onClick={exportPdf} style={{ background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "8px 12px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Download size={14} /> Export PDF</button>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
