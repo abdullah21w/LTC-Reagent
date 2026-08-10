@@ -1045,7 +1045,7 @@ function StatCardV2({ icon, iconBg, iconColor, value, label, active, onClick }) 
         background: THEME.cardBg,
         border: `1px solid ${active ? iconColor : THEME.cardBorder}`,
         borderRadius: 16,
-        boxShadow: active ? `0 0 0 2px ${iconColor}33` : THEME.cardShadow,
+        boxShadow: active ? `0 0 0 2px ${iconColor}33, 0 10px 24px ${iconColor}30` : THEME.cardShadow,
         padding: 20,
         flex: 1,
         minWidth: 160,
@@ -1188,7 +1188,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 24, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: "20px 24px", marginBottom: 20, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 24, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: `0 12px 32px rgba(15,113,115,0.16), ${THEME.cardShadow}`, padding: "20px 24px", marginBottom: 20, flexWrap: "wrap" }}>
         <div style={{ minWidth: 150 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 6 }}>14-day activity</div>
           <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{pulseTotal}</div>
@@ -1208,7 +1208,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                 labelFormatter={(_, p) => (p && p[0] ? p[0].payload.label : "")}
                 contentStyle={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, fontSize: 12 }}
               />
-              <Area type="monotone" dataKey="total" stroke="#0F7173" strokeWidth={2} fill="url(#pulseFill)" />
+              <Area type="monotone" dataKey="total" stroke="#0F7173" strokeWidth={2} fill="url(#pulseFill)" style={{ filter: "drop-shadow(0 0 5px rgba(15,113,115,0.6))" }} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -1238,7 +1238,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                 </div>
                 {activeLot && (
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dm.color, background: dm.bg, borderRadius: 6, padding: "3px 8px" }}>
+                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dm.color, background: dm.bg, borderRadius: 999, padding: "3px 10px" }}>
                       {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
                     </span>
                   </div>
@@ -1328,7 +1328,12 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
         <div key={dept} style={{ marginBottom: 22 }}>
           {activeDept === "all" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: deptColor(dept, departments) }} />
+              <span style={{
+                width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+                background: `${deptColor(dept, departments)}22`, color: deptColor(dept, departments),
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 10, fontWeight: 700,
+              }}>{dept.charAt(0).toUpperCase()}</span>
               <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: 0.3 }}>{dept}</span>
             </div>
           )}
@@ -1346,13 +1351,13 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                       <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         {g.name}
                         {g.device && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.primary, background: "#E4F4F1", borderRadius: 5, padding: "2px 6px" }}>{g.device}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.primary, background: "#E4F4F1", borderRadius: 999, padding: "2px 8px" }}>{g.device}</span>
                         )}
                         {g.lowStock && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.low.color, background: STATUS_META.low.bg, borderRadius: 5, padding: "2px 6px" }}>Low stock</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.low.color, background: STATUS_META.low.bg, borderRadius: 999, padding: "2px 8px" }}>Low stock</span>
                         )}
                         {g.expiringSoon && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.expiring.color, background: STATUS_META.expiring.bg, borderRadius: 5, padding: "2px 6px" }}>Expiring soon</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.expiring.color, background: STATUS_META.expiring.bg, borderRadius: 999, padding: "2px 8px" }}>Expiring soon</span>
                         )}
                         {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
                       </div>
