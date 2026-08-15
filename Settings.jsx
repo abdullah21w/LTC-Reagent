@@ -97,6 +97,23 @@ export default function Settings({ config, presets, role, staffAccounts, devices
   const [maintMsg, setMaintMsg] = useState("");
   const [reportMonth, setReportMonth] = useState(new Date().getMonth() + 1);
   const [visitStats, setVisitStats] = useState({ count: 0, last: null });
+  const [settingsTab, setSettingsTab] = useState("lab");
+  const [labSubTab, setLabSubTab] = useState("departments");
+  const LAB_SUB_TABS = [
+    { key: "departments", label: "Departments" },
+    { key: "presets", label: "Reagent presets" },
+    { key: "devices", label: "Devices" },
+  ];
+
+  const SETTINGS_TABS = [
+    { key: "lab", label: "Lab setup" },
+    ...(role === "owner" ? [
+      { key: "team", label: "Team" },
+      { key: "security", label: "Security" },
+      { key: "notifications", label: "Notifications & reports" },
+      { key: "maintenance", label: "Maintenance" },
+    ] : []),
+  ];
 
   useEffect(() => {
     supabase.from("public_view_visits").select("viewed_at").order("viewed_at", { ascending: false }).then(({ data }) => {
@@ -206,6 +223,44 @@ export default function Settings({ config, presets, role, staffAccounts, devices
         {role === "owner" ? "Full access — you can manage users, permissions, credentials, and inventory setup." : "You can manage departments, presets, and devices here."}
       </div>
 
+      {SETTINGS_TABS.length > 1 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 24, flexWrap: "wrap" }}>
+          {SETTINGS_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setSettingsTab(t.key)}
+              style={{
+                background: settingsTab === t.key ? "#0F7173" : "#fff",
+                color: settingsTab === t.key ? "#fff" : "#516361",
+                border: "1px solid #E1E8E5", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700,
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {settingsTab === "lab" && (
+      <>
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid #E1E8E5" }}>
+        {LAB_SUB_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setLabSubTab(t.key)}
+            style={{
+              background: "none", border: "none", borderBottom: labSubTab === t.key ? "2px solid #0F7173" : "2px solid transparent",
+              color: labSubTab === t.key ? "#0F7173" : "#7B8E8A", fontWeight: 700, fontSize: 13,
+              padding: "8px 4px", marginBottom: -1, marginRight: 16,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {labSubTab === "departments" && (
+      <>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>DEPARTMENTS</div>
       <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 14, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 8 }}>
@@ -228,7 +283,11 @@ export default function Settings({ config, presets, role, staffAccounts, devices
           </div>
         ))}
       </div>
+      </>
+      )}
 
+      {labSubTab === "presets" && (
+      <>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>REAGENT PRESET LIST</div>
       <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
         This is the list staff pick from at the "Details" step when receiving stock.
@@ -314,7 +373,11 @@ export default function Settings({ config, presets, role, staffAccounts, devices
           )
         ))}
       </div>
+      </>
+      )}
 
+      {labSubTab === "devices" && (
+      <>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>DEVICES / ANALYZERS</div>
       <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
         Each device belongs to a department. Staff only see devices matching the department they picked when receiving stock.
@@ -349,8 +412,12 @@ export default function Settings({ config, presets, role, staffAccounts, devices
           </div>
         ))}
       </div>
+      </>
+      )}
+      </>
+      )}
 
-      {role === "owner" && (
+      {role === "owner" && settingsTab === "team" && (
         <>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EMPLOYEE ACCOUNTS & PERMISSIONS</div>
           <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
@@ -390,7 +457,7 @@ export default function Settings({ config, presets, role, staffAccounts, devices
         </>
       )}
 
-      {role === "owner" && (
+      {role === "owner" && settingsTab === "security" && (
         <>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>LOGIN & DEFAULTS</div>
           <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -434,7 +501,11 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
             <div style={{ fontSize: 11, color: "#8A9694" }}>⚠️ Make sure the email above is correct and reachable before saving — if you lose access to it, you'll need to edit the database directly to sign back in.</div>
           </div>
+        </>
+      )}
 
+      {role === "owner" && settingsTab === "notifications" && (
+        <>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>EXPIRY EMAIL ALERTS</div>
           <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
             Once a day, one combined email lists every reagent that hit an alert point below. Leave the email blank to turn this off.
@@ -571,7 +642,11 @@ export default function Settings({ config, presets, role, staffAccounts, devices
             </button>
             {msg && <div style={{ fontSize: 12.5, color: "#2F6B4F" }}>{msg}</div>}
           </div>
+        </>
+      )}
 
+      {role === "owner" && settingsTab === "maintenance" && (
+        <>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3, marginTop: 30 }}>MAINTENANCE</div>
           <div style={{ fontSize: 12.5, color: "#7B8E8A", marginBottom: 12 }}>
             Applies newer rules to data that already existed before those rules were added — for example, removing old depleted lots that have an alternate lot available, the same way new "Log use" entries handle it automatically now. Safe to run anytime; it only touches records that already match a rule.
