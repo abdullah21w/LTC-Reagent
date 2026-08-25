@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer, CheckCircle2 } from "lucide-react";
+import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer, CheckCircle2, ClipboardCheck } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
@@ -8,6 +8,7 @@ import Settings from "./Settings";
 import BarcodeScanner from "./BarcodeScanner";
 import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
+import StockCount from "./StockCount";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -112,8 +113,8 @@ const STATUS_META = {
   expiring: { label: "Expiring soon", color: "#8A5A2B", bg: "#FBF0E4" },
 };
 
-const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true, discard: true };
-const DEFAULT_NEW_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false };
+const FULL_PERMISSIONS = { dashboard: true, reports: true, charts: true, settings: true, receive: true, log_use: true, edit: true, delete: true, discard: true, stock_count: true };
+const DEFAULT_NEW_PERMISSIONS = { dashboard: true, reports: true, charts: false, settings: false, receive: false, log_use: false, edit: false, delete: false, stock_count: false };
 
 const SESSION_MAX_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -778,6 +779,7 @@ export default function App() {
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "calendar" && can("dashboard") && <CalendarPage reagents={reagents} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} groups={groups} />}
           {tab === "reorder" && can("dashboard") && <ReorderPage groups={groups} coverageDays={config.reorder_coverage_days ?? 30} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
+          {tab === "stockcount" && can("stock_count") && <StockCount reagents={reagents} departments={config.departments || []} username={username} reload={loadAll} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
@@ -956,6 +958,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         {can("dashboard") && <SideItem active={tab === "history"} onClick={() => go("history")} icon={<Archive size={16} />} label="History" />}
         {can("dashboard") && <SideItem active={tab === "calendar"} onClick={() => go("calendar")} icon={<CalendarDays size={16} />} label="Calendar" />}
         {can("dashboard") && <SideItem active={tab === "reorder"} onClick={() => go("reorder")} icon={<ShoppingCart size={16} />} label="Reorder" />}
+        {can("stock_count") && <SideItem active={tab === "stockcount"} onClick={() => go("stockcount")} icon={<ClipboardCheck size={16} />} label="Stock count" />}
         {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
@@ -997,7 +1000,7 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", reorder: "Reorder", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", reorder: "Reorder", stockcount: "Stock count", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
@@ -1006,6 +1009,7 @@ const TAB_SUBTITLES = {
   history: "Search any reagent's full lot and usage history",
   calendar: "Expiry dates laid out by day",
   reorder: "Suggested reorder quantities based on usage",
+  stockcount: "Compare what's on the shelf to what the system expects",
   settings: "Manage users, permissions, and defaults",
   charts: "Consumption trends over time",
   deletions: "Full record of edits and deletions",
