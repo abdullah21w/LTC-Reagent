@@ -707,10 +707,13 @@ export default function App() {
           .topbar-date { display: none; }
           .main-content { padding-left: 14px !important; padding-right: 14px !important; }
         }
+        .print-report-only { display: none; }
         @media print {
           .sidebar-desktop, .topbar-noprint, .no-print { display: none !important; }
           .main-content { padding: 0 !important; max-width: none !important; }
           body, .main-content { background: #fff !important; }
+          .print-report-hide { display: none !important; }
+          .print-report-only { display: block !important; }
         }
       `}</style>
 
@@ -1664,6 +1667,7 @@ function HistoryPage({ reagents, logs }) {
 function CalendarPage({ reagents, groups, onSelectGroup }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDay, setSelectedDay] = useState(null);
+  const [printReport, setPrintReport] = useState(false);
 
   const active = (reagents || []).filter((r) => !r.deleted && r.expiry_date);
   const byDay = {};
@@ -1679,6 +1683,7 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
   const firstWeekday = new Date(year, month, 1).getDay(); // 0=Sun
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = todayISO();
+  const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
 
   const cells = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
@@ -1699,26 +1704,42 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
     return groups.find((g) => g.name === item.name && (g.device || "") === (item.device || ""));
   }
 
+  function printMonthReport() {
+    setPrintReport(true);
+  }
+
+  useEffect(() => {
+    if (!printReport) return;
+    const t = setTimeout(() => window.print(), 30);
+    const onAfterPrint = () => setPrintReport(false);
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => { clearTimeout(t); window.removeEventListener("afterprint", onAfterPrint); };
+  }, [printReport]);
+
   const selectedItems = selectedDay ? (byDay[selectedDay] || []) : [];
+  const monthItems = active.filter((r) => r.expiry_date.startsWith(monthPrefix)).sort((a, b) => a.expiry_date.localeCompare(b.expiry_date));
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+      <div className={printReport ? "print-report-hide" : ""} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
         <button onClick={() => changeMonth(-1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronLeft size={16} /></button>
         <div style={{ fontSize: 16, fontWeight: 700, color: THEME.text }}>{monthLabel}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => window.print()} className="no-print" title="Print this month" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><Printer size={16} /></button>
+          <button onClick={printMonthReport} className="no-print" title="Print an expiry report for this month" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "8px 12px", color: THEME.text, display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 }}>
+            <FileText size={16} /> Report
+          </button>
           <button onClick={() => changeMonth(1)} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text }}><ChevronRight size={16} /></button>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
+      <div className={printReport ? "print-report-hide" : ""} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
         {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
           <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: THEME.textMuted, padding: "4px 0" }}>{d}</div>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+      <div className={printReport ? "print-report-hide" : ""} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
         {cells.map((d, i) => {
           if (d === null) return <div key={"e" + i} />;
           const key = dayKey(d);
@@ -1749,7 +1770,7 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
       </div>
 
       {selectedDay && (
-        <div style={{ marginTop: 20 }}>
+        <div className={printReport ? "print-report-hide" : ""} style={{ marginTop: 20 }}>
           <Panel title={`${selectedDay} — ${selectedItems.length} lot(s)`}>
             {selectedItems.map((it) => {
               const g = findGroupFor(it);
@@ -1773,6 +1794,39 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
           </Panel>
         </div>
       )}
+
+      <div className="print-report-only">
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#1B2B2E", marginBottom: 2 }}>Expiring in {monthLabel}</div>
+        <div style={{ fontSize: 12, color: "#7B8E8A", marginBottom: 16 }}>{monthItems.length} lot{monthItems.length === 1 ? "" : "s"} · generated {today}</div>
+        {monthItems.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#7B8E8A" }}>Nothing expires in {monthLabel}.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "2px solid #1B2B2E" }}>
+                <th style={{ padding: "6px 8px 6px 0" }}>Reagent</th>
+                <th style={{ padding: "6px 8px" }}>Lot</th>
+                <th style={{ padding: "6px 8px" }}>Department</th>
+                <th style={{ padding: "6px 8px" }}>Device</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Qty left</th>
+                <th style={{ padding: "6px 0 6px 8px", textAlign: "right" }}>Expires</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthItems.map((it) => (
+                <tr key={it.id} style={{ borderBottom: "1px solid #E1E8E5", color: it.expiry_date < today ? "#C1432B" : "#1B2B2E" }}>
+                  <td style={{ padding: "7px 8px 7px 0", fontWeight: 600 }}>{it.name}</td>
+                  <td style={{ padding: "7px 8px", fontFamily: "monospace" }}>{it.lot_number}</td>
+                  <td style={{ padding: "7px 8px" }}>{it.department}</td>
+                  <td style={{ padding: "7px 8px" }}>{it.device || "—"}</td>
+                  <td style={{ padding: "7px 8px", textAlign: "right" }}>{it.current_quantity} {it.unit}</td>
+                  <td style={{ padding: "7px 0 7px 8px", textAlign: "right", fontWeight: 600 }}>{it.expiry_date}{it.expiry_date < today ? " (expired)" : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
