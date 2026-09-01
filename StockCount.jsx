@@ -17,6 +17,7 @@ const AMBER = "#B8860B";
 const GREEN = "#2F6B4F";
 
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString() : "");
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 export default function StockCount({ reagents, departments, username, reload }) {
   const [view, setView] = useState("list"); // list | active | review
@@ -28,6 +29,8 @@ export default function StockCount({ reagents, departments, username, reload }) 
   const [search, setSearch] = useState("");
   const [showScanner, setShowScanner] = useState(false);
   const [highlightId, setHighlightId] = useState(null);
+  const [loggingItemId, setLoggingItemId] = useState(null);
+  const [logDate, setLogDate] = useState(todayISO());
   const rowRefs = useRef({});
 
   useEffect(() => { loadSessions(); }, []);
@@ -106,6 +109,37 @@ export default function StockCount({ reagents, departments, username, reload }) 
     }
     await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: "Corrected to match count" }).eq("id", item.id);
     setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: "Corrected to match count" } : it)));
+    reload();
+  }
+
+  // For a shortage specifically: the missing units were genuinely used but
+  // never logged. Recording it as a real consumption_logs row (instead of
+  // just silently lowering current_quantity) keeps usage-rate analytics,
+  // reorder suggestions, and "most used" reports honest. The date is left
+  // to the person resolving it — we have no way to know when the units
+  // actually went missing, only that they're gone now.
+  async function logUnrecordedUsage(item, date) {
+    const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
+    if (item.reagent_id) {
+      await supabase.from("consumption_logs").insert({
+        reagent_id: item.reagent_id,
+        amount: shortage,
+        date,
+        used_by: "Unlogged (physical count)",
+        note: "Retroactively logged — found missing during a physical count.",
+      });
+      await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
+      await supabase.from("audit_log").insert({
+        action: "edit",
+        entity: "reagent",
+        description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count found ${shortage} ${item.unit} of unlogged usage, recorded as consumption dated ${date}: ${item.expected_quantity} → ${item.counted_quantity}`,
+        performed_by: username,
+      });
+    }
+    const note = `Logged as usage on ${date}`;
+    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: note } : it)));
+    setLoggingItemId(null);
     reload();
   }
 
@@ -279,6 +313,8 @@ export default function StockCount({ reagents, departments, username, reload }) 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
         {discrepancies.map((it) => {
           const over = Number(it.counted_quantity) > Number(it.expected_quantity);
+          const shortage = !over;
+          const isLogging = loggingItemId === it.id;
           return (
             <div key={it.id} style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderLeft: `4px solid ${AMBER}`, borderRadius: 8, padding: "12px 16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -292,6 +328,12 @@ export default function StockCount({ reagents, departments, username, reload }) 
                 </div>
                 {it.resolved ? (
                   <span style={{ fontSize: 11.5, fontWeight: 700, color: GREEN, background: "#E8F2EC", borderRadius: 6, padding: "4px 10px" }}>{it.resolution_note}</span>
+                ) : shortage ? (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => { setLoggingItemId(it.id); setLogDate(todayISO()); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
+                    <button onClick={() => applyCorrection(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.text, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Correct a logging error</button>
+                    <button onClick={() => dismissDiscrepancy(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Keep system value</button>
+                  </div>
                 ) : (
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => applyCorrection(it)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Apply correction</button>
@@ -299,6 +341,21 @@ export default function StockCount({ reagents, departments, username, reload }) 
                   </div>
                 )}
               </div>
+
+              {isLogging && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.cardBorder}`, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, color: T.textMuted }}>Best guess for when it was used:</span>
+                  <input
+                    type="date"
+                    value={logDate}
+                    max={todayISO()}
+                    onChange={(e) => setLogDate(e.target.value)}
+                    style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
+                  />
+                  <button onClick={() => logUnrecordedUsage(it, logDate)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
+                  <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                </div>
+              )}
             </div>
           );
         })}
