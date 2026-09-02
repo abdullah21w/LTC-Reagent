@@ -784,7 +784,7 @@ export default function App() {
           {tab === "reorder" && can("dashboard") && <ReorderPage groups={groups} coverageDays={config.reorder_coverage_days ?? 30} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
           {tab === "stockcount" && can("stock_count") && <StockCount reagents={reagents} departments={config.departments || []} username={username} reload={loadAll} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
-          {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} />}
+          {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} departments={config.departments || []} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
         </main>
       </div>
@@ -962,7 +962,7 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         {can("dashboard") && <SideItem active={tab === "calendar"} onClick={() => go("calendar")} icon={<CalendarDays size={16} />} label="Calendar" />}
         {can("dashboard") && <SideItem active={tab === "reorder"} onClick={() => go("reorder")} icon={<ShoppingCart size={16} />} label="Reorder" />}
         {can("stock_count") && <SideItem active={tab === "stockcount"} onClick={() => go("stockcount")} icon={<ClipboardCheck size={16} />} label="Stock count" />}
-        {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Usage charts" />}
+        {can("charts") && <SideItem active={tab === "charts"} onClick={() => go("charts")} icon={<BarChart3 size={16} />} label="Statistics" />}
         {role === "owner" && <SideItem active={tab === "deletions"} onClick={() => go("deletions")} icon={<History size={16} />} label="Activity log" />}
 
         {can("settings") && (
@@ -1003,7 +1003,7 @@ function SideItem({ active, onClick, icon, label }) {
   );
 }
 
-const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", reorder: "Reorder", stockcount: "Stock count", settings: "Settings", charts: "Usage charts", deletions: "Activity log" };
+const TAB_TITLES = { dashboard: "Dashboard", detail: "Dashboard", reports: "Reports", devices: "Devices", history: "History", calendar: "Calendar", reorder: "Reorder", stockcount: "Stock count", settings: "Settings", charts: "Statistics", deletions: "Activity log" };
 const TAB_SUBTITLES = {
   dashboard: "Overview of laboratory inventory",
   detail: "Reagent lot details",
@@ -1014,7 +1014,7 @@ const TAB_SUBTITLES = {
   reorder: "Suggested reorder quantities based on usage",
   stockcount: "Compare what's on the shelf to what the system expects",
   settings: "Manage users, permissions, and defaults",
-  charts: "Consumption trends over time",
+  charts: "Pick a statistic to explore",
   deletions: "Full record of edits and deletions",
 };
 
