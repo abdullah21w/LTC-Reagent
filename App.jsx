@@ -1967,7 +1967,9 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
                   })()}
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}</div>
+                  <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>
+                    {it.current_quantity <= 0 ? "Out of stock" : dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}
+                  </div>
                   {it.expiry_date && <div style={{ fontSize: 10.5, color: "#8A9694", marginTop: 1 }}>{it.expiry_date}</div>}
                 </div>
                 {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
