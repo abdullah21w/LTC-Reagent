@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { ClipboardCheck, ScanLine, Search, Check, X, ChevronRight, AlertTriangle, Plus, RotateCcw } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import BarcodeScanner from "./BarcodeScanner";
+import { buildSpreadEntries } from "./logSpread";
 
 const T = {
   primary: "var(--primary)",
@@ -30,7 +31,10 @@ export default function StockCount({ reagents, departments, username, reload }) 
   const [showScanner, setShowScanner] = useState(false);
   const [highlightId, setHighlightId] = useState(null);
   const [loggingItemId, setLoggingItemId] = useState(null);
+  const [logMode, setLogMode] = useState("exact"); // exact | range
   const [logDate, setLogDate] = useState(todayISO());
+  const [logRangeFrom, setLogRangeFrom] = useState(todayISO());
+  const [logRangeTo, setLogRangeTo] = useState(todayISO());
   const rowRefs = useRef({});
 
   useEffect(() => { loadSessions(); }, []);
@@ -164,6 +168,37 @@ export default function StockCount({ reagents, departments, username, reload }) 
       await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
     const note = `Logged as usage on ${date}`;
+    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: note } : it)));
+    setLoggingItemId(null);
+    reload();
+  }
+
+  // Same idea as logUnrecordedUsage, but for when you're confident the
+  // shortage built up gradually over a known period rather than on one
+  // specific day — spreads it into ~weekly entries so it doesn't show up as
+  // one artificial spike in the usage-rate charts.
+  async function logUnrecordedUsageSpread(item, fromDate, toDate) {
+    const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
+    if (item.reagent_id) {
+      const entries = buildSpreadEntries(shortage, fromDate, toDate);
+      await supabase.from("consumption_logs").insert(entries.map((e) => ({
+        reagent_id: item.reagent_id,
+        amount: e.amount,
+        date: e.date,
+        used_by: "Unlogged (physical count)",
+        note: `Retroactively logged — spread from ${fromDate} to ${toDate}, found missing during a physical count.`,
+      })));
+      await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
+      await supabase.from("audit_log").insert({
+        action: "edit",
+        entity: "reagent",
+        description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count found ${shortage} ${item.unit} of unlogged usage, spread as consumption from ${fromDate} to ${toDate}: ${item.expected_quantity} → ${item.counted_quantity}`,
+        performed_by: username,
+      });
+      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
+    }
+    const note = `Logged as usage spread from ${fromDate} to ${toDate}`;
     await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
     setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: note } : it)));
     setLoggingItemId(null);
@@ -357,7 +392,7 @@ export default function StockCount({ reagents, departments, username, reload }) 
                   <span style={{ fontSize: 11.5, fontWeight: 700, color: GREEN, background: "#E8F2EC", borderRadius: 6, padding: "4px 10px" }}>{it.resolution_note}</span>
                 ) : shortage ? (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => { setLoggingItemId(it.id); setLogDate(todayISO()); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
+                    <button onClick={() => { setLoggingItemId(it.id); setLogMode("exact"); setLogDate(todayISO()); setLogRangeFrom(todayISO()); setLogRangeTo(todayISO()); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
                     <button onClick={() => applyCorrection(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.text, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Correct a logging error</button>
                     <button onClick={() => dismissDiscrepancy(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Keep system value</button>
                   </div>
@@ -370,17 +405,58 @@ export default function StockCount({ reagents, departments, username, reload }) 
               </div>
 
               {isLogging && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.cardBorder}`, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12.5, color: T.textMuted }}>Best guess for when it was used:</span>
-                  <input
-                    type="date"
-                    value={logDate}
-                    max={todayISO()}
-                    onChange={(e) => setLogDate(e.target.value)}
-                    style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
-                  />
-                  <button onClick={() => logUnrecordedUsage(it, logDate)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
-                  <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.cardBorder}` }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    <button
+                      onClick={() => setLogMode("exact")}
+                      style={{ background: logMode === "exact" ? T.primary : "none", color: logMode === "exact" ? "#fff" : T.textMuted, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700 }}
+                    >
+                      Exact date
+                    </button>
+                    <button
+                      onClick={() => setLogMode("range")}
+                      style={{ background: logMode === "range" ? T.primary : "none", color: logMode === "range" ? "#fff" : T.textMuted, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700 }}
+                    >
+                      Spread over a range
+                    </button>
+                  </div>
+
+                  {logMode === "exact" ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12.5, color: T.textMuted }}>Best guess for when it was used:</span>
+                      <input
+                        type="date"
+                        value={logDate}
+                        max={todayISO()}
+                        onChange={(e) => setLogDate(e.target.value)}
+                        style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
+                      />
+                      <button onClick={() => logUnrecordedUsage(it, logDate)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
+                      <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12.5, color: T.textMuted }}>Spread across:</span>
+                      <input
+                        type="date"
+                        value={logRangeFrom}
+                        max={logRangeTo}
+                        onChange={(e) => setLogRangeFrom(e.target.value)}
+                        style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
+                      />
+                      <span style={{ fontSize: 12.5, color: T.textMuted }}>to</span>
+                      <input
+                        type="date"
+                        value={logRangeTo}
+                        min={logRangeFrom}
+                        max={todayISO()}
+                        onChange={(e) => setLogRangeTo(e.target.value)}
+                        style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
+                      />
+                      <button onClick={() => logUnrecordedUsageSpread(it, logRangeFrom, logRangeTo)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
+                      <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

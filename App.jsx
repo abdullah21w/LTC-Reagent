@@ -9,6 +9,7 @@ import BarcodeScanner from "./BarcodeScanner";
 import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
+import { buildSpreadEntries } from "./logSpread";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -509,11 +510,24 @@ export default function App() {
       }
       await supabase.from("reagents").update(updatePayload).eq("id", item.id);
     }
-    await supabase.from("consumption_logs").update({
-      amount: updated.amount, date: updated.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
-      edited_by: username, edited_at: new Date().toISOString(),
-    }).eq("id", updated.id);
-    await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by} on ${updated.date}`);
+
+    if (updated.spreadMode) {
+      // "Spread over a range" replaces the single row with several smaller
+      // ones across the chosen dates, instead of updating it in place — a
+      // date range can't live in one consumption_logs row.
+      const entries = buildSpreadEntries(updated.amount, updated.rangeFrom, updated.rangeTo);
+      await supabase.from("consumption_logs").delete().eq("id", updated.id);
+      await supabase.from("consumption_logs").insert(entries.map((e) => ({
+        reagent_id: original.reagent_id, amount: e.amount, date: e.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
+      })));
+      await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by}, spread from ${updated.rangeFrom} to ${updated.rangeTo}`);
+    } else {
+      await supabase.from("consumption_logs").update({
+        amount: updated.amount, date: updated.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
+        edited_by: username, edited_at: new Date().toISOString(),
+      }).eq("id", updated.id);
+      await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by} on ${updated.date}`);
+    }
     setEditLog(null);
     loadAll();
   }
@@ -2735,19 +2749,52 @@ function EditLogModal({ log, onClose, onSave }) {
   const [form, setForm] = useState({ ...log });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState("exact"); // exact | range
+  const [rangeFrom, setRangeFrom] = useState(log.date);
+  const [rangeTo, setRangeTo] = useState(log.date);
+
   function submit() {
     if (saving) return;
     setSaving(true);
-    onSave({ ...form, amount: Number(form.amount) }, log);
+    onSave({ ...form, amount: Number(form.amount), spreadMode: mode === "range", rangeFrom, rangeTo }, log);
   }
   return (
     <Modal title="Edit consumption log" onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <label style={labelStyle}>Amount<input type="number" style={inputStyle} value={form.amount} onChange={set("amount")} /></label>
-        <label style={labelStyle}>Date<input type="date" style={inputStyle} value={form.date} onChange={set("date")} /></label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setMode("exact")}
+            style={{ flex: 1, background: mode === "exact" ? "#0F7173" : "#fff", color: mode === "exact" ? "#fff" : "#516361", border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700 }}
+          >
+            Exact date
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("range")}
+            style={{ flex: 1, background: mode === "range" ? "#0F7173" : "#fff", color: mode === "range" ? "#fff" : "#516361", border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700 }}
+          >
+            Spread over a range
+          </button>
+        </div>
+
+        <label style={labelStyle}>Amount{mode === "range" ? " (total across the range)" : ""}<input type="number" style={inputStyle} value={form.amount} onChange={set("amount")} /></label>
+
+        {mode === "exact" ? (
+          <label style={labelStyle}>Date<input type="date" style={inputStyle} value={form.date} onChange={set("date")} /></label>
+        ) : (
+          <div style={{ display: "flex", gap: 10 }}>
+            <label style={{ ...labelStyle, flex: 1 }}>From<input type="date" style={inputStyle} value={rangeFrom} max={rangeTo} onChange={(e) => setRangeFrom(e.target.value)} /></label>
+            <label style={{ ...labelStyle, flex: 1 }}>To<input type="date" style={inputStyle} value={rangeTo} min={rangeFrom} onChange={(e) => setRangeTo(e.target.value)} /></label>
+          </div>
+        )}
+
         <label style={labelStyle}>Used by<input style={inputStyle} value={form.used_by} onChange={set("used_by")} /></label>
         <label style={labelStyle}>Note<input style={inputStyle} value={form.note || ""} onChange={set("note")} /></label>
         <YesNoRow label="Tested by QC" value={form.tested_by_qc} onChange={(v) => setForm((f) => ({ ...f, tested_by_qc: v }))} />
+        {mode === "range" && (
+          <div style={{ fontSize: 11.5, color: "#8A9694" }}>This replaces the single entry with several smaller ones spread weekly across the range, so it totals the same amount without showing up as one spike on one day.</div>
+        )}
         <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
