@@ -97,6 +97,31 @@ export default function StockCount({ reagents, departments, username, reload }) 
     setTimeout(() => setHighlightId(null), 2500);
   }
 
+  // Mirrors the same auto-remove rule App.jsx's recordConsumption applies on
+  // every normal "Log use" entry: once a lot hits 0, hide it from the active
+  // list if another lot of the same reagent+device still has stock (it stays
+  // visible, marked Critical, only when it's the last one left). That rule
+  // lives in App.jsx and never ran for quantity changes made from here, so a
+  // lot zeroed out via a physical count silently stayed "active" forever.
+  async function autoRemoveIfDepleted(reagentId, newQty) {
+    if (newQty > 0) return;
+    const reagent = reagents.find((r) => r.id === reagentId);
+    if (!reagent) return;
+    const hasAlternative = reagents.some((r) => r.id !== reagent.id && r.name === reagent.name && (r.device || "") === (reagent.device || "") && !r.deleted && r.current_quantity > 0);
+    if (!hasAlternative) return;
+    await supabase.from("reagents").update({
+      deleted: true,
+      deleted_by: "Auto (lot depleted, alternate lot available)",
+      deleted_at: new Date().toISOString(),
+    }).eq("id", reagentId);
+    await supabase.from("audit_log").insert({
+      action: "delete",
+      entity: "reagent",
+      description: `${reagent.name} — Lot ${reagent.lot_number} (auto-removed, depleted)`,
+      performed_by: "System",
+    });
+  }
+
   async function applyCorrection(item) {
     if (item.reagent_id) {
       await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
@@ -106,6 +131,7 @@ export default function StockCount({ reagents, departments, username, reload }) 
         description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count adjustment: ${item.expected_quantity} → ${item.counted_quantity}`,
         performed_by: username,
       });
+      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
     await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: "Corrected to match count" }).eq("id", item.id);
     setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: "Corrected to match count" } : it)));
@@ -135,6 +161,7 @@ export default function StockCount({ reagents, departments, username, reload }) 
         description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count found ${shortage} ${item.unit} of unlogged usage, recorded as consumption dated ${date}: ${item.expected_quantity} → ${item.counted_quantity}`,
         performed_by: username,
       });
+      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
     const note = `Logged as usage on ${date}`;
     await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
