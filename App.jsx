@@ -796,7 +796,7 @@ export default function App() {
           {tab === "history" && can("dashboard") && <HistoryPage reagents={reagents} logs={logs} />}
           {tab === "calendar" && can("dashboard") && <CalendarPage reagents={reagents} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} groups={groups} />}
           {tab === "reorder" && can("dashboard") && <ReorderPage groups={groups} coverageDays={config.reorder_coverage_days ?? 30} onSelectGroup={(g) => { setSelectedGroup(g); setTab("detail"); }} />}
-          {tab === "stockcount" && can("stock_count") && <StockCount reagents={reagents} departments={config.departments || []} username={username} reload={loadAll} />}
+          {tab === "stockcount" && can("stock_count") && <StockCount reagents={reagents} departments={config.departments || []} username={username} reload={loadAll} warnDays={warnDays} />}
           {tab === "settings" && can("settings") && <Settings config={config} presets={presets} role={role} staffAccounts={staffAccounts} devices={devices} reload={() => { ensureConfig(); loadAll(); }} onRunMaintenance={runMaintenance} />}
           {tab === "charts" && can("charts") && <Charts reagents={reagents} logs={logs} departments={config.departments || []} />}
           {tab === "deletions" && role === "owner" && <DeletionsLog activityLog={activityLog} onClear={clearActivityLog} />}
