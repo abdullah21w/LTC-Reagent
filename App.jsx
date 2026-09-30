@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer, CheckCircle2, ClipboardCheck } from "lucide-react";
-import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
+import { AreaChart, Area, ResponsiveContainer, Tooltip, CartesianGrid, XAxis, YAxis } from "recharts";
 import { supabase } from "./supabaseClient";
 import { verifyPassword, hashPassword } from "./passwordUtils";
 import Login from "./Login";
@@ -680,30 +680,57 @@ export default function App() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         :root {
-          --primary: #0F7173;
-          --primary-light: #5FBFB0;
-          --sidebar-bg: #1B2B2E;
-          --sidebar-text: #8FA39E;
-          --sidebar-text-active: #F0F3F2;
-          --bg: #F0F3F2;
-          --card-bg: #ffffff;
-          --card-border: #E1E8E5;
-          --card-shadow: 0 8px 24px rgba(0,0,0,0.06);
-          --text: #1B2B2E;
-          --text-muted: #7B8E8A;
+          --primary: #0F766E;
+          --primary-light: #14B8A6;
+          --sidebar-bg: #0F172A;
+          --sidebar-text: #94A3B8;
+          --sidebar-text-active: #F8FAFC;
+          --bg: #F8FAFC;
+          --card-bg: #FFFFFF;
+          --card-border: #E2E8F0;
+          --card-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06);
+          --text: #0F172A;
+          --text-muted: #64748B;
+          /* Semantic tokens (new) — status colors + soft tints, theme-aware */
+          --surface-2: #F1F5F9;
+          --border-strong: #CBD5E1;
+          --primary-soft: rgba(15,118,110,0.09);
+          --critical: #DC2626;
+          --critical-soft: rgba(220,38,38,0.08);
+          --warning: #D97706;
+          --warning-soft: rgba(245,158,11,0.12);
+          --success: #16A34A;
+          --success-soft: rgba(22,163,74,0.09);
+          --info: #2563EB;
+          --info-soft: rgba(37,99,235,0.08);
+          --sidebar-hover: rgba(148,163,184,0.08);
+          --sidebar-border: rgba(148,163,184,0.12);
         }
         [data-theme="dark"] {
-          --primary: #5FBFB0;
-          --primary-light: #7DD3C0;
-          --sidebar-bg: #0C1416;
-          --sidebar-text: #6E827D;
-          --sidebar-text-active: #EDF2F1;
-          --bg: #10191B;
-          --card-bg: #1A2426;
-          --card-border: #2B3A3C;
-          --card-shadow: 0 8px 24px rgba(0,0,0,0.4);
-          --text: #E7EEEC;
-          --text-muted: #8CA09B;
+          --primary: #2DD4BF;
+          --primary-light: #14B8A6;
+          --sidebar-bg: #070B14;
+          --sidebar-text: #8B98AC;
+          --sidebar-text-active: #F1F5F9;
+          --bg: #0B1120;
+          --card-bg: #111827;
+          --card-border: #1F2937;
+          --card-shadow: 0 1px 2px rgba(0,0,0,0.3);
+          --text: #E5E7EB;
+          --text-muted: #94A3B8;
+          --surface-2: #0F1623;
+          --border-strong: #334155;
+          --primary-soft: rgba(45,212,191,0.10);
+          --critical: #F87171;
+          --critical-soft: rgba(248,113,113,0.12);
+          --warning: #FBBF24;
+          --warning-soft: rgba(251,191,36,0.12);
+          --success: #4ADE80;
+          --success-soft: rgba(74,222,128,0.10);
+          --info: #60A5FA;
+          --info-soft: rgba(96,165,250,0.12);
+          --sidebar-hover: rgba(148,163,184,0.07);
+          --sidebar-border: rgba(148,163,184,0.10);
         }
         * { box-sizing: border-box; }
         button { font-family: inherit; cursor: pointer; }
@@ -712,7 +739,7 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
         .hover-lift { transition: all 0.2s ease; }
         .hover-lift:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(0,0,0,0.09); }
-        .sidebar-desktop { display: block; }
+        .sidebar-desktop { display: block; position: sticky; top: 0; }
         .sidebar-mobile-toggle { display: none; }
         @media (max-width: 880px) {
           .sidebar-desktop { position: fixed; top: 0; left: 0; height: 100vh; z-index: 70; transform: translateX(-100%); transition: transform 0.25s ease; }
@@ -720,6 +747,41 @@ export default function App() {
           .sidebar-mobile-toggle { display: flex !important; }
           .topbar-date { display: none; }
           .main-content { padding-left: 14px !important; padding-right: 14px !important; }
+        }
+        /* Dashboard layout (desktop ≥1100 / tablet 880–1099 / mobile <880) */
+        .dash-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 24px; }
+        .dash-grid { display: grid; grid-template-columns: minmax(0, 1fr) 304px; gap: 24px; align-items: start; }
+        .dash-rail { display: flex; flex-direction: column; gap: 16px; }
+        .dash-row-main { display: grid; grid-template-columns: 10px minmax(0, 1fr) 108px 122px 16px; align-items: center; gap: 14px; }
+        .dash-scroll-x { overflow-x: auto; scrollbar-width: none; }
+        .dash-scroll-x::-webkit-scrollbar { display: none; }
+        .dash-row:hover { border-color: var(--border-strong) !important; }
+        .dash-click:hover { background: var(--surface-2); }
+        .side-item:hover { background: var(--sidebar-hover) !important; color: var(--sidebar-text-active) !important; }
+        .dash-input { font-size: 13.5px; }
+        .dash-input:focus { border-color: var(--primary) !important; box-shadow: 0 0 0 3px var(--primary-soft); }
+        .dash-pills { flex-wrap: wrap; }
+        .dash-show-sm { display: none; }
+        .dash-expand { padding: 14px 16px 14px 40px; }
+        @media (max-width: 1279px) {
+          .dash-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (max-width: 1099px) {
+          .dash-grid { grid-template-columns: minmax(0, 1fr); }
+          .dash-rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; order: -1; }
+        }
+        @media (max-width: 879px) {
+          .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+          .dash-row-main { grid-template-columns: 10px minmax(0, 1fr) auto 16px; gap: 10px; }
+          .dash-hide-sm { display: none !important; }
+          .dash-show-sm { display: inline; }
+          .dash-expand { padding: 14px; }
+          .dash-input { font-size: 16px; }
+          .dash-pills { flex-wrap: nowrap; }
+          .topbar-pad { padding: 12px 14px !important; }
+        }
+        @media (max-width: 599px) {
+          .dash-rail { grid-template-columns: minmax(0, 1fr); }
         }
         .print-report-only { display: none; }
         @media print {
@@ -742,38 +804,33 @@ export default function App() {
       />
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <TopBar tab={tab} role={role} username={username} onEnableNotif={enableNotifications} onMenuClick={() => setSidebarOpen(true)} />
+        <TopBar tab={tab} role={role} username={username} onEnableNotif={enableNotifications} onMenuClick={() => setSidebarOpen(true)} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />
 
         <main className="main-content" style={{ maxWidth: 1160, margin: "0 auto", padding: "24px 28px 80px" }}>
-          {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
-            <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
-              <AlertTriangle size={18} color="#DC2626" />
-              <div style={{ flex: 1, fontSize: 13.5, color: "#7F1D1D" }}><b>{counts.red}</b> reagent{counts.red > 1 ? "s" : ""} expired or out of stock — needs attention now.</div>
-              <button onClick={() => setBannerDismissed(true)} style={{ background: "none", border: "none", color: "#7F1D1D" }}><X size={16} /></button>
-            </div>
-          )}
-          {counts.flagged > 0 && tab !== "settings" && (
-            <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
-              <ClipboardX size={18} color="#D97706" />
-              <div style={{ flex: 1, fontSize: 13.5, color: "#78350F" }}><b>{counts.flagged}</b> reagent{counts.flagged > 1 ? "s" : ""} failed an inspection check on receipt — review before use.</div>
-            </div>
-          )}
-          {lotToLotNotice && (
-            <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
-              <AlertTriangle size={18} color="#4F46E5" />
-              <div style={{ flex: 1, fontSize: 13.5, color: "#3730A3" }}>{lotToLotNotice}</div>
-              <button onClick={() => setLotToLotNotice(null)} style={{ background: "none", border: "none", color: "#3730A3" }}><X size={16} /></button>
-            </div>
-          )}
-          {loginSummary && (
-            <div style={{ background: "#EAF6F4", border: "1px solid #C6E8E3", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
-              <History size={18} color="#0F7173" />
-              <div style={{ flex: 1, fontSize: 13.5, color: "#0F5F5B" }}>
-                Since your last login ({loginSummary.since}): <b>{loginSummary.received}</b> received, <b>{loginSummary.used}</b> used
-                {loginSummary.critical > 0 && <> · <b style={{ color: "#C1432B" }}>{loginSummary.critical} newly critical</b></>}
-                {loginSummary.lowStock > 0 && <> · <b style={{ color: "#B8860B" }}>{loginSummary.lowStock} newly low stock</b></>}
-              </div>
-              <button onClick={() => setLoginSummary(null)} style={{ background: "none", border: "none", color: "#0F5F5B" }}><X size={16} /></button>
+          {((counts.red > 0 && !bannerDismissed && tab !== "settings") || (counts.flagged > 0 && tab !== "settings") || lotToLotNotice || loginSummary) && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+              {counts.red > 0 && !bannerDismissed && tab !== "settings" && (
+                <ShellAlert tone="critical" icon={<AlertTriangle size={15} />} onDismiss={() => setBannerDismissed(true)}>
+                  <b>{counts.red}</b> reagent{counts.red > 1 ? "s" : ""} expired or out of stock — needs attention now.
+                </ShellAlert>
+              )}
+              {counts.flagged > 0 && tab !== "settings" && (
+                <ShellAlert tone="warning" icon={<ClipboardX size={15} />}>
+                  <b>{counts.flagged}</b> reagent{counts.flagged > 1 ? "s" : ""} failed an inspection check on receipt — review before use.
+                </ShellAlert>
+              )}
+              {lotToLotNotice && (
+                <ShellAlert tone="info" icon={<AlertTriangle size={15} />} onDismiss={() => setLotToLotNotice(null)}>
+                  {lotToLotNotice}
+                </ShellAlert>
+              )}
+              {loginSummary && (
+                <ShellAlert tone="primary" icon={<History size={15} />} onDismiss={() => setLoginSummary(null)}>
+                  Since your last login ({loginSummary.since}): <b>{loginSummary.received}</b> received, <b>{loginSummary.used}</b> used
+                  {loginSummary.critical > 0 && <> · <b style={{ color: "var(--critical)" }}>{loginSummary.critical} newly critical</b></>}
+                  {loginSummary.lowStock > 0 && <> · <b style={{ color: "var(--warning)" }}>{loginSummary.lowStock} newly low stock</b></>}
+                </ShellAlert>
+              )}
             </div>
           )}
 
@@ -955,18 +1012,18 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
   const go = (t) => { setTab(t); onCloseMobile(); };
   const initial = (username || "?").charAt(0).toUpperCase();
   return (
-    <aside className={`sidebar-desktop${open ? " open" : ""}`} style={{ width: 264, background: THEME.sidebarBg, borderRight: "none", display: "flex", flexDirection: "column", padding: "22px 16px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px 22px", borderBottom: "1px solid rgba(255,255,255,0.1)", marginBottom: 18 }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: THEME.primaryLight, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-          <Beaker size={19} color={THEME.sidebarBg} />
+    <aside className={`sidebar-desktop${open ? " open" : ""}`} style={{ width: 240, flexShrink: 0, background: THEME.sidebarBg, borderRight: "1px solid var(--sidebar-border)", display: "flex", flexDirection: "column", padding: "18px 12px", height: "100vh" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 8px 18px", borderBottom: "1px solid var(--sidebar-border)", marginBottom: 8 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(180deg, #14B8A6, #0F766E)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Beaker size={17} color="#F8FAFC" />
         </div>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: THEME.sidebarTextActive }}>Reagent Log</div>
-          <div style={{ fontSize: 11.5, color: THEME.sidebarText }}>LTC Lab Inventory</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: THEME.sidebarTextActive, letterSpacing: -0.1 }}>Reagent Log</div>
+          <div style={{ fontSize: 11, color: THEME.sidebarText }}>LTC Lab Inventory</div>
         </div>
       </div>
 
-      <nav style={{ flex: 1, overflowY: "auto" }}>
+      <nav style={{ flex: 1, overflowY: "auto", paddingRight: 2 }}>
         {can("dashboard") && <SideItem active={tab === "dashboard" || tab === "detail"} onClick={() => go("dashboard")} icon={<LayoutGrid size={16} />} label="Dashboard" />}
 
         <SideGroup label="Tracking" />
@@ -991,28 +1048,40 @@ function Sidebar({ tab, setTab, role, can, onAdd, onLog, onLogout, onChangePassw
         {can("receive") && <SideItem active={false} onClick={() => { onAdd(); onCloseMobile(); }} icon={<Plus size={16} />} label="Receive stock" />}
       </nav>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid rgba(255,255,255,0.1)` }}>
-        <div style={{ width: 34, height: 34, borderRadius: "50%", background: THEME.primaryLight, color: THEME.sidebarBg, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5, flexShrink: 0 }}>{initial}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, padding: "12px 6px 0", borderTop: "1px solid var(--sidebar-border)" }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(20,184,166,0.16)", color: "#5EEAD4", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}>{initial}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: THEME.sidebarTextActive, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
-          <div style={{ fontSize: 11, color: THEME.sidebarText }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: THEME.sidebarTextActive, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{username}</div>
+          <div style={{ fontSize: 10.5, color: THEME.sidebarText }}>{role === "owner" ? "Owner" : "Lab staff"}</div>
         </div>
-        <button onClick={onToggleDarkMode} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}>{darkMode ? <Sun size={15} /> : <Moon size={15} />}</button>
-        <button onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><KeyRound size={15} /></button>
-        <button onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 4 }}><LogOut size={15} /></button>
+        <button className="side-item" onClick={onToggleDarkMode} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 6, borderRadius: 6, display: "flex" }}>{darkMode ? <Sun size={14} /> : <Moon size={14} />}</button>
+        <button className="side-item" onClick={onChangePassword} title="Change my password" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 6, borderRadius: 6, display: "flex" }}><KeyRound size={14} /></button>
+        <button className="side-item" onClick={onLogout} title="Log out" style={{ background: "none", border: "none", color: THEME.sidebarText, padding: 6, borderRadius: 6, display: "flex" }}><LogOut size={14} /></button>
       </div>
     </aside>
   );
 }
 
 function SideGroup({ label }) {
-  return <div style={{ fontSize: 10.5, fontWeight: 700, color: THEME.sidebarText, letterSpacing: 0.6, textTransform: "uppercase", padding: "16px 10px 6px" }}>{label}</div>;
+  return <div style={{ fontSize: 10, fontWeight: 600, color: "#64748B", letterSpacing: 0.8, textTransform: "uppercase", padding: "16px 10px 6px" }}>{label}</div>;
 }
 
 function SideItem({ active, onClick, icon, label }) {
   return (
-    <button onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: active ? "rgba(95,191,176,0.15)" : "transparent", color: active ? THEME.primaryLight : THEME.sidebarText, border: "none", borderRadius: 8, padding: "9px 10px", fontSize: 13.5, fontWeight: active ? 600 : 500, marginBottom: 2, textAlign: "left" }}>
-      {icon} {label}
+    <button
+      className={active ? undefined : "side-item"}
+      onClick={onClick}
+      style={{
+        position: "relative", width: "100%", display: "flex", alignItems: "center", gap: 10,
+        background: active ? "rgba(20,184,166,0.12)" : "transparent",
+        color: active ? "#F8FAFC" : THEME.sidebarText,
+        border: "none", borderRadius: 7, padding: "8px 10px", fontSize: 13, fontWeight: active ? 600 : 500,
+        marginBottom: 1, textAlign: "left", transition: "background .12s, color .12s",
+      }}
+    >
+      {active && <span style={{ position: "absolute", left: -12, top: 7, bottom: 7, width: 3, borderRadius: "0 3px 3px 0", background: "#14B8A6" }} />}
+      <span style={{ display: "flex", color: active ? "#2DD4BF" : "inherit", opacity: active ? 1 : 0.85 }}>{icon}</span>
+      {label}
     </button>
   );
 }
@@ -1032,65 +1101,119 @@ const TAB_SUBTITLES = {
   deletions: "Full record of edits and deletions",
 };
 
-function TopBar({ tab, role, username, onEnableNotif, onMenuClick }) {
-  const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+function TopBar({ tab, role, username, onEnableNotif, onMenuClick, darkMode, onToggleDarkMode }) {
+  const today = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
   const initial = (username || "?").charAt(0).toUpperCase();
+  const iconBtn = { background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", color: THEME.textMuted, flexShrink: 0 };
   return (
-    <div className="topbar-noprint" style={{ background: THEME.cardBg, borderBottom: `1px solid ${THEME.cardBorder}`, padding: "18px 28px" }}>
+    <div className="topbar-noprint topbar-pad" style={{ background: THEME.cardBg, borderBottom: `1px solid ${THEME.cardBorder}`, padding: "14px 28px", position: "sticky", top: 0, zIndex: 40 }}>
       <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-          <button className="sidebar-mobile-toggle" onClick={onMenuClick} style={{ display: "none", background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: 8, color: THEME.text, flexShrink: 0 }}>
-            <Menu size={18} />
+          <button className="sidebar-mobile-toggle" onClick={onMenuClick} style={{ ...iconBtn, display: "none", color: THEME.text }}>
+            <Menu size={17} />
           </button>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_TITLES[tab] || "Reagent Log"}</div>
-            <div style={{ fontSize: 13, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_SUBTITLES[tab] || ""}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: THEME.text, letterSpacing: -0.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_TITLES[tab] || "Reagent Log"}</div>
+            <div style={{ fontSize: 12.5, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{TAB_SUBTITLES[tab] || ""}</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-          <button onClick={onEnableNotif} title="Enable browser alerts" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: 9, color: THEME.textMuted }}><Bell size={16} /></button>
-          <div className="topbar-date" style={{ fontSize: 13, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{today}</div>
-          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#E4F4F1", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13.5 }}>{initial}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <div className="topbar-date" style={{ fontSize: 12, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", padding: "0 8px", whiteSpace: "nowrap" }}>{today}</div>
+          <button onClick={onEnableNotif} title="Enable browser alerts" style={iconBtn}><Bell size={15} /></button>
+          {onToggleDarkMode && (
+            <button onClick={onToggleDarkMode} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} style={iconBtn}>{darkMode ? <Sun size={15} /> : <Moon size={15} />}</button>
+          )}
+          <div title={`${username} · ${role === "owner" ? "Owner" : "Lab staff"}`} style={{ width: 34, height: 34, borderRadius: 8, background: "var(--primary-soft)", color: THEME.primary, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{initial}</div>
         </div>
       </div>
     </div>
   );
 }
 
-function StatCardV2({ icon, iconBg, iconColor, value, label, active, onClick }) {
+// Compact, consistent alert used by the app-shell notices. Tone only changes
+// the accent color; the conditions and dismiss handlers live in App().
+const ALERT_TONES = {
+  critical: "var(--critical)",
+  warning: "var(--warning)",
+  info: "var(--info)",
+  primary: "var(--primary)",
+};
+function ShellAlert({ tone, icon, onDismiss, children }) {
+  const c = ALERT_TONES[tone] || ALERT_TONES.info;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `3px solid ${c}`, borderRadius: 8, padding: "9px 12px", boxShadow: THEME.cardShadow }}>
+      <span style={{ display: "flex", color: c, flexShrink: 0 }}>{icon}</span>
+      <div style={{ flex: 1, fontSize: 13, color: THEME.text, lineHeight: 1.45 }}>{children}</div>
+      {onDismiss && (
+        <button onClick={onDismiss} title="Dismiss" style={{ background: "none", border: "none", color: THEME.textMuted, padding: 4, display: "flex", borderRadius: 6, flexShrink: 0 }}><X size={14} /></button>
+      )}
+    </div>
+  );
+}
+
+// Dashboard-only status tones (STATUS_META is shared with other pages and is
+// intentionally left as-is). Keys mirror STATUS_META / group.status.
+const DASH_TONE = {
+  red: { color: "var(--critical)", soft: "var(--critical-soft)" },
+  yellow: { color: "var(--warning)", soft: "var(--warning-soft)" },
+  green: { color: "var(--success)", soft: "var(--success-soft)" },
+  low: { color: "var(--warning)", soft: "var(--warning-soft)" },
+  expiring: { color: "#EA580C", soft: "rgba(234,88,12,0.10)" },
+  primary: { color: "var(--primary)", soft: "var(--primary-soft)" },
+  info: { color: "var(--info)", soft: "var(--info-soft)" },
+};
+
+function StatusDot({ tone, size = 8 }) {
+  const t = DASH_TONE[tone] || DASH_TONE.green;
+  return <span style={{ width: size, height: size, borderRadius: "50%", background: t.color, boxShadow: `0 0 0 3px ${t.soft}`, flexShrink: 0, display: "inline-block" }} />;
+}
+
+function Tag({ tone, children }) {
+  const t = DASH_TONE[tone] || DASH_TONE.primary;
+  return <span style={{ fontSize: 10.5, fontWeight: 600, color: t.color, background: t.soft, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap", lineHeight: 1.6 }}>{children}</span>;
+}
+
+function StatCardV2({ icon, tone = "primary", value, label, active, onClick }) {
+  const t = DASH_TONE[tone] || DASH_TONE.primary;
   return (
     <button
       onClick={onClick}
-      className="hover-lift"
+      aria-pressed={onClick ? !!active : undefined}
       style={{
+        position: "relative",
+        overflow: "hidden",
         background: THEME.cardBg,
-        border: `1px solid ${active ? iconColor : THEME.cardBorder}`,
-        borderRadius: 16,
-        boxShadow: active ? `0 0 0 2px ${iconColor}33, 0 10px 24px ${iconColor}30` : THEME.cardShadow,
-        padding: 20,
-        flex: 1,
-        minWidth: 160,
+        border: `1px solid ${active ? t.color : THEME.cardBorder}`,
+        borderRadius: 10,
+        boxShadow: active ? `0 0 0 3px ${t.soft}` : THEME.cardShadow,
+        padding: "18px 18px 16px",
+        minWidth: 0,
         textAlign: "left",
         cursor: onClick ? "pointer" : "default",
+        transition: "border-color .15s, box-shadow .15s",
       }}
     >
-      <div style={{ width: 44, height: 44, borderRadius: "50%", background: iconBg, color: iconColor, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
-        {icon}
+      <span style={{ position: "absolute", left: 0, right: 0, top: 0, height: 3, background: t.color, opacity: active ? 1 : 0.75 }} />
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 12, minHeight: 32 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: THEME.text, lineHeight: 1.25, paddingTop: 2 }}>{label}</span>
+        <span style={{ width: 32, height: 32, borderRadius: 8, background: t.soft, color: t.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</span>
       </div>
-      <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, fontFamily: "'Inter', sans-serif", lineHeight: 1.1 }}>{value}</div>
-      <div style={{ fontSize: 13, color: THEME.textMuted, marginTop: 4 }}>{label}</div>
+      <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, lineHeight: 1, fontVariantNumeric: "tabular-nums", letterSpacing: -0.6 }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: active ? t.color : THEME.textMuted, marginTop: 8, fontWeight: active ? 600 : 400, minHeight: 15 }}>
+        {onClick ? (active ? "Filter applied" : "Click to filter") : " "}
+      </div>
     </button>
   );
 }
 
-function Panel({ title, action, children }) {
+function Panel({ title, action, children, flush }) {
   return (
-    <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: THEME.cardShadow, padding: 20, flex: 1, minWidth: 300 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>{title}</div>
+    <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, minWidth: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "14px 16px", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: THEME.text, letterSpacing: -0.1 }}>{title}</div>
         {action}
       </div>
-      {children}
+      <div style={{ padding: flush ? 0 : "6px 16px 14px" }}>{children}</div>
     </div>
   );
 }
@@ -1101,16 +1224,20 @@ function DeptPill({ active, onClick, label, color }) {
       onClick={onClick}
       style={{
         flexShrink: 0,
-        background: active ? color : THEME.cardBg,
-        color: active ? "#fff" : THEME.text,
-        border: `1px solid ${active ? color : THEME.cardBorder}`,
-        borderRadius: 20,
-        padding: "7px 14px",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        background: active ? "var(--primary-soft)" : THEME.cardBg,
+        color: active ? THEME.text : THEME.textMuted,
+        border: `1px solid ${active ? "var(--border-strong)" : THEME.cardBorder}`,
+        borderRadius: 6,
+        padding: "5px 10px",
         fontSize: 12.5,
-        fontWeight: 700,
+        fontWeight: 600,
         whiteSpace: "nowrap",
       }}
     >
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
       {label}
     </button>
   );
@@ -1123,6 +1250,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
   const [statusFilter, setStatusFilter] = useState("all");
   const [snoozingKey, setSnoozingKey] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set());
+  const [showSnoozed, setShowSnoozed] = useState(false);
 
   if (groups.length === 0) {
     return (
@@ -1207,256 +1335,308 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
 
   const noFilters = !term && deviceFilter === "all" && statusFilter === "all" && activeDept === "all";
 
+  const shownCount = byDept.reduce((s, x) => s + x.items.length, 0);
+  const mostUsedMax = mostUsedList.reduce((m, x) => Math.max(m, x.qty), 0);
+  const eyebrow = { fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 };
+  const listRow = (last) => ({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: last ? "none" : `1px solid ${THEME.cardBorder}` });
+  const rowTitle = { fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+  const rowSub = { fontSize: 12, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 };
+  const emptyNote = { fontSize: 13, color: THEME.textMuted, padding: "14px 16px", lineHeight: 1.5 };
+  const fieldInput = { border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "8px 12px", boxSizing: "border-box", background: THEME.cardBg, color: THEME.text, outline: "none" };
+  const ghostBtn = { background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
+
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 24, background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 16, boxShadow: `0 12px 32px rgba(15,113,115,0.16), ${THEME.cardShadow}`, padding: "20px 24px", marginBottom: 20, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 150 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 6 }}>14-day activity</div>
-          <div style={{ fontSize: 30, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{pulseTotal}</div>
-          <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 2 }}>units consumed, all departments</div>
-        </div>
-        <div style={{ flex: 1, minWidth: 220, height: 64 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={pulseData} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
-              <defs>
-                <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F7173" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#0F7173" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <Tooltip
-                formatter={(v) => [`${v} units`, "Used"]}
-                labelFormatter={(_, p) => (p && p[0] ? p[0].payload.label : "")}
-                contentStyle={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, fontSize: 12 }}
+      <div className="dash-kpis">
+        <StatCardV2 icon={<Beaker size={16} />} tone="primary" value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
+        <StatCardV2 icon={<AlertTriangle size={16} />} tone="red" value={counts.red} label="Critical" active={statusFilter === "critical"} onClick={() => setStatusFilter(statusFilter === "critical" ? "all" : "critical")} />
+        <StatCardV2 icon={<TrendingDown size={16} />} tone="low" value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
+        <StatCardV2 icon={<Clock size={16} />} tone="expiring" value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
+        <StatCardV2 icon={<CheckCircle2 size={16} />} tone="green" value={counts.green} label="Stable" active={statusFilter === "stable"} onClick={() => setStatusFilter(statusFilter === "stable" ? "all" : "stable")} />
+        <StatCardV2 icon={<Cpu size={16} />} tone="info" value={(devices || []).length} label="Connected devices" />
+      </div>
+
+      <div className="dash-grid">
+        {/* ── Primary column: All reagents ─────────────────────────────── */}
+        <section style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, minWidth: 0 }}>
+          <div style={{ padding: "18px 20px 16px", borderBottom: `1px solid ${THEME.cardBorder}` }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: THEME.text, letterSpacing: -0.2 }}>All reagents</span>
+                <span style={{ fontSize: 12.5, color: THEME.textMuted, fontVariantNumeric: "tabular-nums" }}>{noFilters ? groups.length : `${shownCount} of ${groups.length}`}</span>
+              </div>
+              {statusFilter !== "all" && (
+                <button onClick={() => setStatusFilter("all")} style={{ background: "none", border: "none", color: THEME.primary, fontSize: 12, fontWeight: 600, padding: 0 }}>Clear status filter</button>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+              <input
+                className="dash-input"
+                placeholder="Search reagent, lot number, or device…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ ...fieldInput, flex: 2, minWidth: 180 }}
               />
-              <Area type="monotone" dataKey="total" stroke="#0F7173" strokeWidth={2} fill="url(#pulseFill)" style={{ filter: "drop-shadow(0 0 5px rgba(15,113,115,0.6))" }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+              <select
+                className="dash-input"
+                value={deviceFilter}
+                onChange={(e) => setDeviceFilter(e.target.value)}
+                style={{ ...fieldInput, flex: 1, minWidth: 140 }}
+              >
+                <option value="all">All devices</option>
+                {allDevices.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+            <div className="dash-pills dash-scroll-x" style={{ display: "flex", gap: 6 }}>
+              <DeptPill active={activeDept === "all"} onClick={() => setActiveDept("all")} label="All" color="#64748B" />
+              {deptCounts.map(({ dept, n }) => (
+                <DeptPill key={dept} active={activeDept === dept} onClick={() => setActiveDept(dept)} label={`${dept} · ${n}`} color={deptColor(dept, departments)} />
+              ))}
+            </div>
+          </div>
 
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCardV2 icon={<Beaker size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={groups.length} label="Total reagents" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
-        <StatCardV2 icon={<AlertTriangle size={20} />} iconBg={STATUS_META.red.bg} iconColor={STATUS_META.red.color} value={counts.red} label="Critical" active={statusFilter === "critical"} onClick={() => setStatusFilter(statusFilter === "critical" ? "all" : "critical")} />
-        <StatCardV2 icon={<TrendingDown size={20} />} iconBg={STATUS_META.low.bg} iconColor={STATUS_META.low.color} value={counts.lowStock} label="Low stock" active={statusFilter === "low"} onClick={() => setStatusFilter(statusFilter === "low" ? "all" : "low")} />
-        <StatCardV2 icon={<Clock size={20} />} iconBg={STATUS_META.expiring.bg} iconColor={STATUS_META.expiring.color} value={counts.expiringSoon} label="Expiring soon" active={statusFilter === "expiring"} onClick={() => setStatusFilter(statusFilter === "expiring" ? "all" : "expiring")} />
-        <StatCardV2 icon={<CheckCircle2 size={20} />} iconBg={STATUS_META.green.bg} iconColor={STATUS_META.green.color} value={counts.green} label="Stable" active={statusFilter === "stable"} onClick={() => setStatusFilter(statusFilter === "stable" ? "all" : "stable")} />
-        <StatCardV2 icon={<Cpu size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={(devices || []).length} label="Connected devices" />
-      </div>
-
-      <div style={{ display: "flex", gap: 16, marginBottom: 32, flexWrap: "wrap" }}>
-        <Panel title="Devices" action={<span style={{ fontSize: 12.5, color: THEME.primary, fontWeight: 600, cursor: "pointer" }} onClick={onViewDevices}>View all</span>}>
-          {(devices || []).length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No devices added yet.</div>}
-          {(devices || []).slice(0, 5).map((d) => {
-            const activeLot = groups.flatMap((g) => g.items).find((i) => i.device === d.name && i.active_on_device);
-            const dm = activeLot ? STATUS_META[statusOf(activeLot, 30)] : null;
-            const dExp = activeLot && activeLot.expiry_date ? daysBetween(activeLot.expiry_date, todayISO()) : null;
-            return (
-              <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
-                  <div style={{ fontSize: 11.5, color: THEME.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeLot ? `${activeLot.name} · Lot ${activeLot.lot_number}` : "No active lot"}</div>
-                </div>
-                {activeLot && (
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, color: dm.color, background: dm.bg, borderRadius: 999, padding: "3px 10px" }}>
-                      {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
-                    </span>
+          <div style={{ padding: "8px 16px 20px" }}>
+            {byDept.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: THEME.textMuted, fontSize: 13 }}>
+                No matches{noFilters ? "" : " for this filter"}.
+              </div>
+            )}
+            {byDept.map(({ dept, items }) => (
+              <div key={dept} style={{ marginTop: 16 }}>
+                {activeDept === "all" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 4px 10px" }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: deptColor(dept, departments), flexShrink: 0 }} />
+                    <span style={{ fontWeight: 700, fontSize: 11.5, letterSpacing: 0.7, textTransform: "uppercase", color: THEME.text }}>{dept}</span>
+                    <span style={{ fontSize: 11.5, color: THEME.textMuted }}>{items.length}</span>
+                    <span style={{ flex: 1, height: 1, background: THEME.cardBorder, marginLeft: 4 }} />
                   </div>
                 )}
-              </div>
-            );
-          })}
-        </Panel>
-
-        <Panel title="Recent usage">
-          {recentUsage.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet.</div>}
-          {recentUsage.map((l) => {
-            const r = reagentById[l.reagent_id] || {};
-            return (
-              <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name || "—"}</div>
-                  <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{l.used_by} · {r.device || "—"} · {l.date}</div>
-                </div>
-                <span style={{ fontSize: 13, fontWeight: 600, color: THEME.text, flexShrink: 0 }}>{l.amount} {r.unit || ""}</span>
-              </div>
-            );
-          })}
-        </Panel>
-
-        <Panel title="Predicted to run low" action={<span style={{ fontSize: 12, color: THEME.textMuted }}>Based on 30-day usage</span>}>
-          {predictedList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing predicted to run low in the next 2 weeks, based on recent usage.</div>}
-          {predictedList.map((g) => (
-            <div key={g.key} onClick={() => onSelect(g)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
-                <div style={{ fontSize: 11.5, color: THEME.textMuted }}>~{g.dailyRate.toFixed(1)} {g.unit}/day · {g.totalQty} {g.unit} left</div>
-              </div>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: g.predictedDaysLeft <= 3 ? STATUS_META.red.color : STATUS_META.expiring.color, background: g.predictedDaysLeft <= 3 ? STATUS_META.red.bg : STATUS_META.expiring.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>
-                ~{g.predictedDaysLeft}d left
-              </span>
-            </div>
-          ))}
-        </Panel>
-
-        <Panel title="Most used this month">
-          {mostUsedList.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>No consumption logged yet this month.</div>}
-          {mostUsedList.map((m, i) => (
-            <div key={m.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${THEME.cardBorder}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: THEME.textMuted, width: 16, flexShrink: 0 }}>#{i + 1}</span>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
-              </div>
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: THEME.primary, flexShrink: 0 }}>{m.qty} {m.unit}</span>
-            </div>
-          ))}
-        </Panel>
-      </div>
-
-      <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text, margin: "0 0 14px" }}>All reagents</div>
-
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-        <input
-          placeholder="Search reagent, lot number, or device…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: 2, minWidth: 200, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 16, boxSizing: "border-box", background: THEME.cardBg, color: THEME.text }}
-        />
-        <select
-          value={deviceFilter}
-          onChange={(e) => setDeviceFilter(e.target.value)}
-          style={{ flex: 1, minWidth: 160, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 15, boxSizing: "border-box", background: THEME.cardBg, color: THEME.text }}
-        >
-          <option value="all">All devices</option>
-          {allDevices.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
-      </div>
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 22, overflowX: "auto", paddingBottom: 2 }}>
-        <DeptPill active={activeDept === "all"} onClick={() => setActiveDept("all")} label="All" color="#516361" />
-        {deptCounts.map(({ dept, n }) => (
-          <DeptPill key={dept} active={activeDept === dept} onClick={() => setActiveDept(dept)} label={`${dept} · ${n}`} color={deptColor(dept, departments)} />
-        ))}
-      </div>
-
-      {byDept.length === 0 && (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: THEME.textMuted, fontSize: 13.5 }}>
-          No matches{noFilters ? "" : " for this filter"}.
-        </div>
-      )}
-      {byDept.map(({ dept, items }) => (
-        <div key={dept} style={{ marginBottom: 22 }}>
-          {activeDept === "all" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{
-                width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
-                background: `${deptColor(dept, departments)}22`, color: deptColor(dept, departments),
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 10, fontWeight: 700,
-              }}>{dept.charAt(0).toUpperCase()}</span>
-              <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: 0.3 }}>{dept}</span>
-            </div>
-          )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {items.map((g) => {
-              const m = STATUS_META[g.status];
-              const dExp = g.fefo.expiry_date ? daysBetween(g.fefo.expiry_date, todayISO()) : null;
-              const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
-              const isOpen = expanded.has(g.key);
-              const lastLog = isOpen ? lastLogFor(g) : null;
-              return (
-                <div key={g.key} className="hover-lift" style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderLeft: `4px solid ${m.color}`, borderRadius: 8, overflow: "hidden" }}>
-                  <div onClick={() => toggleExpand(g.key)} style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 140 }}>
-                      <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                        {g.name}
-                        {g.device && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.primary, background: "#E4F4F1", borderRadius: 999, padding: "2px 8px" }}>{g.device}</span>
-                        )}
-                        {g.lowStock && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.low.color, background: STATUS_META.low.bg, borderRadius: 999, padding: "2px 8px" }}>Low stock</span>
-                        )}
-                        {g.expiringSoon && (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: STATUS_META.expiring.color, background: STATUS_META.expiring.bg, borderRadius: 999, padding: "2px 8px" }}>Expiring soon</span>
-                        )}
-                        {g.flagged && <ClipboardX size={13} color="#B8860B" title="Inspection issue on receipt" />}
-                      </div>
-                      <div style={{ fontSize: 12.5, color: THEME.textMuted, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
-                        {q.main}{q.sub && <span style={{ opacity: 0.7 }}> ({q.sub})</span>} total left · {g.items.length > 1 ? `${g.items.length} lots (nearest: ${g.fefo.lot_number})` : `Lot ${g.fefo.lot_number}`}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.label}</div>
-                      <div style={{ fontSize: 11.5, color: THEME.textMuted }}>{dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`}</div>
-                    </div>
-                    <ChevronRight size={16} color="#B7C3C0" style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
-                  </div>
-                  {isOpen && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "14px 32px", padding: "4px 16px 16px", borderTop: `1px solid ${THEME.cardBorder}`, background: THEME.bg, fontSize: 12.5 }}>
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Lot</div>
-                        <div style={{ color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{g.fefo.lot_number}</div>
-                      </div>
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Expires</div>
-                        <div style={{ color: THEME.text }}>{g.fefo.expiry_date || "No expiry"}</div>
-                      </div>
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Quantity</div>
-                        <div style={{ color: THEME.text }}>{q.main}{q.sub && ` (${q.sub})`}</div>
-                      </div>
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>Last used</div>
-                        <div style={{ color: THEME.text }}>{lastLog ? `${lastLog.date} · ${lastLog.amount} ${g.unit} by ${lastLog.used_by}` : "—"}</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 14, marginLeft: "auto", marginTop: 12 }}>
-                        {can("edit") && g.lowStock && (
-                          <button onClick={(e) => { e.stopPropagation(); setSnoozingKey(snoozingKey === g.key ? null : g.key); }} style={{ background: "none", border: "none", color: THEME.textMuted, fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                            <Clock size={13} /> Snooze
-                          </button>
-                        )}
-                        {can("discard") && (
-                          <button onClick={(e) => { e.stopPropagation(); onDiscardReagent(g.fefo); }} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: STATUS_META.red.color }}>
-                            <Ban size={15} />
-                          </button>
-                        )}
-                        {can("delete") && (
-                          <button onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }} title="Remove this lot" style={{ background: "none", border: "none", color: STATUS_META.red.color }}>
-                            <Trash2 size={15} />
-                          </button>
-                        )}
-                        <button onClick={(e) => { e.stopPropagation(); onSelect(g); }} style={{ background: "none", border: "none", color: THEME.primary, fontSize: 12.5, fontWeight: 700 }}>
-                          View full detail →
-                        </button>
-                      </div>
-                      {snoozingKey === g.key && (
-                        <div style={{ display: "flex", gap: 6, width: "100%" }}>
-                          {[3, 7, 14, 30].map((d) => (
-                            <button key={d} onClick={(e) => { e.stopPropagation(); onSnooze(g.name, g.device, d); setSnoozingKey(null); }} style={{ fontSize: 11.5, background: "none", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "4px 9px", color: THEME.text }}>{d}d</button>
-                          ))}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {items.map((g) => {
+                    const m = STATUS_META[g.status];
+                    const tone = DASH_TONE[g.status];
+                    const dExp = g.fefo.expiry_date ? daysBetween(g.fefo.expiry_date, todayISO()) : null;
+                    const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
+                    const isOpen = expanded.has(g.key);
+                    const lastLog = lastLogFor(g);
+                    const expText = dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`;
+                    return (
+                      <div key={g.key} className="dash-row" style={{ background: THEME.cardBg, border: `1px solid ${isOpen ? "var(--border-strong)" : THEME.cardBorder}`, borderRadius: 8, overflow: "hidden", transition: "border-color .12s" }}>
+                        <div className="dash-row-main dash-click" onClick={() => toggleExpand(g.key)} style={{ padding: "14px 16px", cursor: "pointer" }}>
+                          <StatusDot tone={g.status} />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                              <span style={{ fontWeight: 600, fontSize: 15, color: THEME.text, letterSpacing: -0.15, lineHeight: 1.3 }}>{g.name}</span>
+                              {g.lowStock && <Tag tone="low">Low stock</Tag>}
+                              {g.expiringSoon && <Tag tone="expiring">Expiring soon</Tag>}
+                              {g.flagged && <ClipboardX size={14} color="var(--warning)" title="Inspection issue on receipt" />}
+                            </div>
+                            <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.4 }}>
+                              <span className="dash-show-sm" style={{ color: THEME.text, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{q.main} · </span>
+                              {g.device && <span style={{ fontWeight: 600, color: THEME.textMuted }}>{g.device} · </span>}
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, opacity: 0.85 }}>{g.items.length > 1 ? `${g.items.length} lots · nearest ${g.fefo.lot_number}` : `Lot ${g.fefo.lot_number}`}</span>
+                              {lastLog && <span className="dash-hide-sm" style={{ opacity: 0.85 }}> · last used {lastLog.date}</span>}
+                            </div>
+                          </div>
+                          <div className="dash-hide-sm" style={{ textAlign: "right", minWidth: 0 }}>
+                            <div style={{ fontSize: 14.5, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", whiteSpace: "nowrap", letterSpacing: -0.2 }}>{q.main}</div>
+                            <div style={{ fontSize: 11.5, color: THEME.textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 3 }}>{q.sub || "total left"}</div>
+                          </div>
+                          <div style={{ textAlign: "right", minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: tone.color, whiteSpace: "nowrap" }}>{m.label}</div>
+                            <div style={{ fontSize: 12, color: dExp !== null && dExp < 0 ? "var(--critical)" : THEME.textMuted, whiteSpace: "nowrap", marginTop: 3 }}>{expText}</div>
+                          </div>
+                          <ChevronRight size={15} color="var(--text-muted)" style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
                         </div>
-                      )}
+                        {isOpen && (
+                          <div className="dash-expand" style={{ borderTop: `1px solid ${THEME.cardBorder}`, background: "var(--surface-2)" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))", gap: "10px 20px", fontSize: 12.5 }}>
+                              <div>
+                                <div style={eyebrow}>Lot</div>
+                                <div style={{ color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{g.fefo.lot_number}</div>
+                              </div>
+                              <div>
+                                <div style={eyebrow}>Expires</div>
+                                <div style={{ color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{g.fefo.expiry_date || "No expiry"}</div>
+                              </div>
+                              <div>
+                                <div style={eyebrow}>Quantity</div>
+                                <div style={{ color: THEME.text }}>{q.main}{q.sub && ` (${q.sub})`}</div>
+                              </div>
+                              <div>
+                                <div style={eyebrow}>Last used</div>
+                                <div style={{ color: THEME.text }}>{lastLog ? `${lastLog.date} · ${lastLog.amount} ${g.unit} by ${lastLog.used_by}` : "—"}</div>
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${THEME.cardBorder}` }}>
+                              {can("edit") && g.lowStock && (
+                                <button onClick={(e) => { e.stopPropagation(); setSnoozingKey(snoozingKey === g.key ? null : g.key); }} style={{ ...ghostBtn, color: THEME.text }}>
+                                  <Clock size={13} /> Snooze
+                                </button>
+                              )}
+                              {can("discard") && (
+                                <button onClick={(e) => { e.stopPropagation(); onDiscardReagent(g.fefo); }} title="Discard (expired/damaged)" style={{ ...ghostBtn, color: "var(--critical)" }}>
+                                  <Ban size={13} /> Discard
+                                </button>
+                              )}
+                              {can("delete") && (
+                                <button onClick={(e) => { e.stopPropagation(); onDeleteReagent(g.fefo.id); }} title="Remove this lot" style={{ ...ghostBtn, color: "var(--critical)" }}>
+                                  <Trash2 size={13} /> Remove
+                                </button>
+                              )}
+                              <button onClick={(e) => { e.stopPropagation(); onSelect(g); }} style={{ marginLeft: "auto", background: THEME.primary, color: THEME.cardBg, border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                View full detail <ChevronRight size={13} />
+                              </button>
+                            </div>
+                            {snoozingKey === g.key && (
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 11.5, color: THEME.textMuted, marginRight: 2 }}>Snooze for</span>
+                                {[3, 7, 14, 30].map((d) => (
+                                  <button key={d} onClick={(e) => { e.stopPropagation(); onSnooze(g.name, g.device, d); setSnoozingKey(null); }} style={{ ...ghostBtn, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace" }}>{d}d</button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Secondary rail: operational panels ───────────────────────── */}
+        <aside className="dash-rail">
+          <Panel flush title="Predicted to run low" action={<span style={{ fontSize: 11, color: THEME.textMuted }}>Based on 30-day usage</span>}>
+            {predictedList.length === 0 && <div style={emptyNote}>Nothing predicted to run low in the next 2 weeks, based on recent usage.</div>}
+            {predictedList.map((g, i) => {
+              const sev = g.predictedDaysLeft <= 3 ? "red" : "expiring";
+              return (
+                <div key={g.key} className="dash-click" onClick={() => onSelect(g)} style={{ ...listRow(i === predictedList.length - 1), cursor: "pointer" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    <StatusDot tone={sev} size={7} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={rowTitle}>{g.name}{g.device && <span style={{ fontWeight: 500, color: THEME.textMuted }}> · {g.device}</span>}</div>
+                      <div style={rowSub}>~{g.dailyRate.toFixed(1)} {g.unit}/day · {g.totalQty} {g.unit} left</div>
                     </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: DASH_TONE[sev].color, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 }}>~{g.predictedDaysLeft}d</span>
+                </div>
+              );
+            })}
+          </Panel>
+
+          <Panel flush title="Devices" action={<button onClick={onViewDevices} style={{ background: "none", border: "none", fontSize: 12, color: THEME.primary, fontWeight: 600, padding: 0, display: "inline-flex", alignItems: "center", gap: 2 }}>View all <ChevronRight size={13} /></button>}>
+            {(devices || []).length === 0 && <div style={emptyNote}>No devices added yet.</div>}
+            {(devices || []).slice(0, 5).map((d, i, arr) => {
+              const activeLot = groups.flatMap((g) => g.items).find((it) => it.device === d.name && it.active_on_device);
+              const dStatus = activeLot ? statusOf(activeLot, 30) : null;
+              const dExp = activeLot && activeLot.expiry_date ? daysBetween(activeLot.expiry_date, todayISO()) : null;
+              return (
+                <div key={d.id} style={listRow(i === arr.length - 1)}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    <span style={{ width: 26, height: 26, borderRadius: 6, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, color: THEME.textMuted, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Cpu size={13} /></span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={rowTitle}>{d.name}</div>
+                      <div style={rowSub}>{activeLot ? `${activeLot.name} · Lot ${activeLot.lot_number}` : "No active lot"}</div>
+                    </div>
+                  </div>
+                  {activeLot && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, color: DASH_TONE[dStatus].color, flexShrink: 0, whiteSpace: "nowrap" }}>
+                      <StatusDot tone={dStatus} size={6} />
+                      {dExp === null ? "No expiry" : dExp < 0 ? "Expired" : `${dExp}d left`}
+                    </span>
                   )}
                 </div>
               );
             })}
-          </div>
-        </div>
-      ))}
+          </Panel>
 
-      {snoozedGroups.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 8 }}>Snoozed alerts</div>
-          {snoozedGroups.map((g) => (
-            <div key={"snz-" + g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px", borderBottom: `1px solid ${THEME.cardBorder}`, fontSize: 12.5 }}>
-              <span style={{ color: THEME.textMuted }}>{g.name} — until {g.snoozedUntil}</span>
-              {can("edit") && <button onClick={() => onUnsnooze(g.name, g.device)} style={{ fontSize: 12, color: THEME.primary, background: "none", border: "none", fontWeight: 600 }}>Unsnooze</button>}
+          <Panel title="14-day activity" action={<span style={{ fontSize: 11, color: THEME.textMuted }}>All departments</span>}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 0 4px" }}>
+              <span style={{ fontSize: 26, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: -0.5 }}>{pulseTotal}</span>
+              <span style={{ fontSize: 11.5, color: THEME.textMuted }}>units consumed</span>
             </div>
-          ))}
-        </div>
-      )}
+            <div style={{ width: "100%", height: 180, marginTop: 4 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={pulseData} margin={{ top: 6, right: 4, bottom: 0, left: -18 }}>
+                  <defs>
+                    <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#14B8A6" stopOpacity={0.22} />
+                      <stop offset="100%" stopColor="#14B8A6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="rgba(100,116,139,0.18)" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#94A3B8" }} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
+                  <YAxis tick={{ fontSize: 10, fill: "#94A3B8" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
+                  <Tooltip
+                    formatter={(v) => [`${v} units`, "Used"]}
+                    labelFormatter={(_, p) => (p && p[0] ? p[0].payload.label : "")}
+                    contentStyle={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, fontSize: 12, color: THEME.text, boxShadow: "0 4px 12px rgba(15,23,42,0.08)" }}
+                    cursor={{ stroke: "#94A3B8", strokeDasharray: "3 3" }}
+                  />
+                  <Area type="monotone" dataKey="total" stroke="#14B8A6" strokeWidth={1.75} fill="url(#pulseFill)" dot={false} activeDot={{ r: 3.5, strokeWidth: 0, fill: "#0F766E" }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+
+          <Panel flush title="Recent usage">
+            {recentUsage.length === 0 && <div style={emptyNote}>No consumption logged yet.</div>}
+            {recentUsage.map((l, i) => {
+              const r = reagentById[l.reagent_id] || {};
+              return (
+                <div key={l.id} style={listRow(i === recentUsage.length - 1)}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={rowTitle}>{r.name || "—"}</div>
+                    <div style={rowSub}>{l.used_by} · {r.device || "—"} · <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{l.date}</span></div>
+                  </div>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0, whiteSpace: "nowrap" }}>{l.amount} <span style={{ color: THEME.textMuted, fontWeight: 500 }}>{r.unit || ""}</span></span>
+                </div>
+              );
+            })}
+          </Panel>
+
+          <Panel flush title="Most used this month">
+            {mostUsedList.length === 0 && <div style={emptyNote}>No consumption logged yet this month.</div>}
+            {mostUsedList.map((mu, i) => (
+              <div key={mu.name} style={{ padding: "8px 14px", borderBottom: i === mostUsedList.length - 1 ? "none" : `1px solid ${THEME.cardBorder}` }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.textMuted, width: 18, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{String(i + 1).padStart(2, "0")}</span>
+                    <span style={rowTitle}>{mu.name}</span>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0, whiteSpace: "nowrap" }}>{mu.qty} <span style={{ color: THEME.textMuted, fontWeight: 500 }}>{mu.unit}</span></span>
+                </div>
+                <div style={{ marginLeft: 26, marginTop: 5, height: 3, borderRadius: 2, background: "var(--surface-2)", overflow: "hidden" }}>
+                  <div style={{ width: `${mostUsedMax > 0 ? Math.max(4, (mu.qty / mostUsedMax) * 100) : 0}%`, height: "100%", background: "var(--primary-light)", borderRadius: 2 }} />
+                </div>
+              </div>
+            ))}
+          </Panel>
+
+          {snoozedGroups.length > 0 && (
+            <Panel
+              flush
+              title={<span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Snoozed alerts <span style={{ fontSize: 11, fontWeight: 600, color: THEME.textMuted, background: "var(--surface-2)", borderRadius: 4, padding: "0 6px" }}>{snoozedGroups.length}</span></span>}
+              action={<button onClick={() => setShowSnoozed((v) => !v)} style={{ background: "none", border: "none", fontSize: 12, color: THEME.primary, fontWeight: 600, padding: 0 }}>{showSnoozed ? "Hide" : "Show"}</button>}
+            >
+              {showSnoozed && snoozedGroups.map((g, i) => (
+                <div key={"snz-" + g.key} style={listRow(i === snoozedGroups.length - 1)}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={rowTitle}>{g.name}</div>
+                    <div style={rowSub}>until <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{g.snoozedUntil}</span></div>
+                  </div>
+                  {can("edit") && <button onClick={() => onUnsnooze(g.name, g.device)} style={{ fontSize: 12, color: THEME.primary, background: "none", border: "none", fontWeight: 600, padding: 0, flexShrink: 0 }}>Unsnooze</button>}
+                </div>
+              ))}
+              {!showSnoozed && <div style={{ ...emptyNote, padding: "9px 14px" }}>Low-stock alerts muted for {snoozedGroups.length} reagent{snoozedGroups.length > 1 ? "s" : ""}.</div>}
+            </Panel>
+          )}
+        </aside>
+      </div>
     </div>
   );
 }
