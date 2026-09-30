@@ -1773,10 +1773,10 @@ function HistoryPage({ reagents, logs }) {
 
       {matchedName && (
         <>
-          <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-            <StatCardV2 icon={<Archive size={20} />} iconBg="#E4F4F1" iconColor={THEME.primary} value={lots.length} label="Total lots ever received" />
-            <StatCardV2 icon={<Beaker size={20} />} iconBg="#F0FDF4" iconColor="#16A34A" value={totalRemaining} label="Currently remaining (all lots)" />
-            <StatCardV2 icon={<TrendingDown size={20} />} iconBg="#FFF7ED" iconColor="#EA580C" value={totalReceived} label="Total ever received" />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16, marginBottom: 20 }}>
+            <StatCardV2 icon={<Archive size={20} />} tone="primary" value={lots.length} label="Total lots ever received" />
+            <StatCardV2 icon={<Beaker size={20} />} tone="green" value={totalRemaining} label="Currently remaining (all lots)" />
+            <StatCardV2 icon={<TrendingDown size={20} />} tone="expiring" value={totalReceived} label="Total ever received" />
           </div>
 
           <Panel title={`${matchedName} — Lots (${lots.length})`}>
