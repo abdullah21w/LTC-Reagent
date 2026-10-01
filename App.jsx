@@ -10,6 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
+import { recentUsageByGroup } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -611,8 +612,10 @@ export default function App() {
       if (!map[key]) map[key] = [];
       map[key].push(r);
     }
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 30);
+    // Usage over the last 30 days per reagent+device, counted across ALL of
+    // the group's lots (including ones that have since run out or been
+    // removed) — see forecast.js. Stock below still counts active lots only.
+    const recentUsage = recentUsageByGroup(reagents, logs, todayISO());
     return Object.entries(map).map(([key, items]) => {
       const sorted = [...items].sort(compareLots);
       const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
@@ -626,12 +629,11 @@ export default function App() {
       const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
       const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
 
-      const itemIds = new Set(items.map((i) => i.id));
-      const recentUsed = (logs || []).filter((l) => !l.deleted && itemIds.has(l.reagent_id) && new Date(l.date) >= cutoff).reduce((s, l) => s + Number(l.amount || 0), 0);
+      const recentUsed = recentUsage[key] || 0;
       const dailyRate = recentUsed / 30;
       const predictedDaysLeft = dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
 
-      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, lowStockRaw, snoozedUntil, expiringSoon, dailyRate, predictedDaysLeft };
+      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, lowStockRaw, snoozedUntil, expiringSoon, recentUsed, dailyRate, predictedDaysLeft };
     });
   }, [reagents, warnDays, logs, snoozes]);
 
@@ -2081,10 +2083,11 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
 
 function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog, onSnooze, onUnsnooze }) {
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
-  const last30 = logs.filter((l) => daysBetween(todayISO(), l.date) <= 30);
-  const consumed30 = last30.reduce((s, l) => s + l.amount, 0);
-  const avgDaily = consumed30 / 30;
-  const daysLeft = avgDaily > 0 ? Math.round(group.totalQty / avgDaily) : null;
+  // Same forecast values as the Dashboard, Reorder and the header above —
+  // computed once in App's `groups`, not recalculated here.
+  const consumed30 = group.recentUsed ?? 0;
+  const avgDaily = group.dailyRate ?? 0;
+  const daysLeft = group.predictedDaysLeft ?? null;
 
   const inspectionLabels = {
     intact_container: "Intact container",
@@ -2138,7 +2141,7 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
           <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{daysLeft !== null ? `${daysLeft}d` : "—"}</div>
         </div>
         <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>
-          <div style={{ fontSize: 11, color: "#8A9694", fontWeight: 600, textTransform: "uppercase" }}>Consumed this month</div>
+          <div style={{ fontSize: 11, color: "#8A9694", fontWeight: 600, textTransform: "uppercase" }}>Consumed (last 30 days)</div>
           <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{consumed30} <span style={{ fontSize: 13, fontWeight: 500 }}>{group.unit}</span></div>
         </div>
       </div>
