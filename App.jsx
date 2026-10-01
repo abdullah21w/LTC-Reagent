@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -841,6 +841,9 @@ export default function App() {
             <DetailView
               group={groups.find((g) => g.key === selectedGroup.key) || selectedGroup}
               logs={logs.filter((l) => !l.deleted && (groups.find((g) => g.key === selectedGroup.key)?.items || []).some((i) => i.id === l.reagent_id))}
+              allReagents={reagents}
+              allLogs={logs}
+              coverageDays={config.reorder_coverage_days ?? 30}
               role={role}
               can={can}
               warnDays={warnDays}
@@ -2030,8 +2033,7 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
 function ReorderPage({ groups, coverageDays, onSelectGroup }) {
   const suggestions = groups
     .map((g) => {
-      const target = Math.ceil((g.dailyRate || 0) * coverageDays);
-      const suggestedQty = target - g.totalQty;
+      const { target, suggestedQty } = reorderSuggestion(g.dailyRate, g.totalQty, coverageDays);
       return { ...g, target, suggestedQty };
     })
     .filter((g) => g.dailyRate > 0 && g.suggestedQty > 0)
@@ -2081,13 +2083,88 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
   );
 }
 
-function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog, onSnooze, onUnsnooze }) {
+const MONO = "'IBM Plex Mono', monospace";
+
+// Display helpers for the reagent detail page: at most `dp` decimals, no
+// floating-point noise (e.g. 1.1400000000000001 → 1.14).
+function fmtQty(n, dp = 2) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
+  const f = 10 ** dp;
+  return String(Math.round(Number(n) * f) / f);
+}
+function fmtDay(iso) {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function ForecastTile({ label, value, unit, sub, tone }) {
+  const t = tone ? DASH_TONE[tone] : null;
+  return (
+    <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, padding: "14px 16px", minWidth: 0 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: THEME.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: t ? t.color : THEME.text, fontFamily: MONO, marginTop: 8, lineHeight: 1.1, letterSpacing: -0.4 }}>
+        {value}
+        {unit && <span style={{ fontSize: 13, fontWeight: 500, color: THEME.textMuted, marginLeft: 5, letterSpacing: 0 }}>{unit}</span>}
+      </div>
+      {sub && <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 6, lineHeight: 1.4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function HowRow({ label, children }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", padding: "11px 0", borderTop: `1px solid ${THEME.cardBorder}` }}>
+      <div style={{ flex: "0 0 170px", fontSize: 12.5, fontWeight: 600, color: THEME.text }}>{label}</div>
+      <div style={{ flex: "1 1 260px", minWidth: 0, fontSize: 12.5, color: THEME.textMuted, lineHeight: 1.6 }}>{children}</div>
+    </div>
+  );
+}
+
+const sectionHeading = { fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, margin: "0 0 10px" };
+
+function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog, onSnooze, onUnsnooze }) {
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
-  // Same forecast values as the Dashboard, Reorder and the header above —
-  // computed once in App's `groups`, not recalculated here.
+  const [showHow, setShowHow] = useState(false);
+
+  // All forecast values come from App's shared `groups` (forecast.js) — the
+  // same numbers the Dashboard, Reorder and the public summary show.
+  const today = todayISO();
+  const unit = (group.unit || "").trim();
+  const totalQty = group.totalQty;
   const consumed30 = group.recentUsed ?? 0;
   const avgDaily = group.dailyRate ?? 0;
   const daysLeft = group.predictedDaysLeft ?? null;
+  const runOut = runOutDate(today, daysLeft);
+  const breakdown = usageBreakdown(group.key, allReagents, allLogs, today);
+  const reorder = reorderSuggestion(avgDaily, totalQty, coverageDays);
+  const nextLot = group.fefo || group.items[0];
+  const threshold = nextLot ? nextLot.low_stock_threshold : null;
+  const statusTone = DASH_TONE[group.status] || DASH_TONE.green;
+
+  const daysTone = daysLeft === null ? null : daysLeft <= 3 ? "red" : daysLeft <= 14 ? "low" : null;
+
+  let lowTone, lowText;
+  if (totalQty <= 0) {
+    lowTone = "red";
+    lowText = "Out of stock — shown as Critical rather than Low stock.";
+  } else if (group.lowStockRaw) {
+    lowTone = "low";
+    lowText = `Low stock: ${fmtQty(totalQty)} ${unit} left, at or below the threshold of ${fmtQty(threshold)} ${unit}.${group.snoozedUntil ? ` Alert snoozed until ${group.snoozedUntil}.` : ""}`;
+  } else {
+    lowTone = "green";
+    lowText = `Not low: ${fmtQty(totalQty)} ${unit} left, above the threshold of ${fmtQty(threshold)} ${unit}.`;
+  }
+
+  let reorderTone, reorderText;
+  if (avgDaily <= 0) {
+    reorderTone = null;
+    reorderText = "No reorder suggestion — no usage logged in the last 30 days.";
+  } else if (reorder.needed) {
+    reorderTone = "primary";
+    reorderText = `Suggest ordering ${fmtQty(reorder.suggestedQty)} ${unit} to cover ${coverageDays} days at the current rate.`;
+  } else {
+    reorderTone = "green";
+    reorderText = `No reorder needed — ${fmtQty(totalQty)} ${unit} in stock covers the ${coverageDays}-day target of ${fmtQty(reorder.target)} ${unit}.`;
+  }
 
   const inspectionLabels = {
     intact_container: "Intact container",
@@ -2097,91 +2174,183 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
     storage_condition_ok: "Storage condition",
   };
 
+  const lineDot = (tone) => <StatusDot tone={tone} size={7} />;
+  const iconBtn = { background: "none", border: "none", padding: 4, display: "flex", borderRadius: 6 };
+
   return (
     <div>
-      <button onClick={onBack} style={{ background: "none", border: "none", color: "#0F7173", fontSize: 13, fontWeight: 600, marginBottom: 18, display: "flex", alignItems: "center", gap: 4 }}>← Back to dashboard</button>
-      <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{group.name}</h2>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>
-        {group.department}{group.device ? ` · ${group.device}` : ""} · {group.totalQty} {group.unit} in stock across {group.items.length} lot(s)
-        {group.predictedDaysLeft !== null && group.predictedDaysLeft !== undefined && (
-          <> · <span style={{ color: group.predictedDaysLeft <= 3 ? "#C1432B" : group.predictedDaysLeft <= 14 ? "#B8860B" : "#7B8E8A", fontWeight: 700 }}>~{group.predictedDaysLeft}d left at current usage rate</span></>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: THEME.primary, fontSize: 13, fontWeight: 600, marginBottom: 16, display: "flex", alignItems: "center", gap: 4, padding: 0 }}>
+        <ChevronLeft size={15} /> Back to dashboard
+      </button>
+
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: THEME.text, margin: "0 0 8px", letterSpacing: -0.3 }}>{group.name}</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600, color: statusTone.color }}>
+              <StatusDot tone={group.status} size={7} /> {STATUS_META[group.status]?.label}
+            </span>
+            {group.device && <Tag tone="primary">{group.device}</Tag>}
+            {group.department && <span style={{ fontSize: 12, color: THEME.textMuted }}>{group.department}</span>}
+          </div>
+        </div>
+        {group.lowStockRaw && can("edit") && (
+          <div>
+            {group.snoozedUntil ? (
+              <div style={{ fontSize: 12.5, color: THEME.textMuted, display: "flex", alignItems: "center", gap: 8 }}>
+                Low-stock alert snoozed until {group.snoozedUntil}
+                <button onClick={() => onUnsnooze(group.name, group.device)} style={{ fontSize: 12, color: THEME.primary, background: "none", border: "none", fontWeight: 600, padding: 0 }}>Unsnooze</button>
+              </div>
+            ) : (
+              <>
+                <button onClick={() => setShowSnoozePicker(!showSnoozePicker)} style={{ fontSize: 12.5, color: "var(--warning)", background: "var(--warning-soft)", border: "1px solid transparent", borderRadius: 6, padding: "6px 10px", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <Clock size={13} /> Snooze low-stock alert
+                </button>
+                {showSnoozePicker && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {[3, 7, 14, 30].map((d) => (
+                      <button key={d} onClick={() => { onSnooze(group.name, group.device, d); setShowSnoozePicker(false); }} style={{ fontSize: 12, background: THEME.cardBg, color: THEME.text, border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "4px 9px", fontFamily: MONO }}>{d}d</button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
-      {group.lowStockRaw && can("edit") && (
-        <div style={{ marginBottom: 20 }}>
-          {group.snoozedUntil ? (
-            <div style={{ fontSize: 12.5, color: "#B8860B", display: "flex", alignItems: "center", gap: 8 }}>
-              Low-stock alert snoozed until {group.snoozedUntil}
-              <button onClick={() => onUnsnooze(group.name, group.device)} style={{ fontSize: 12, color: "#0F7173", background: "none", border: "none", fontWeight: 600 }}>Unsnooze</button>
-            </div>
-          ) : (
-            <>
-              <button onClick={() => setShowSnoozePicker(!showSnoozePicker)} style={{ fontSize: 12.5, color: "#B8860B", background: "#FBF3DF", border: "1px solid #F5E1A8", borderRadius: 6, padding: "5px 10px", fontWeight: 600 }}>
-                Snooze low-stock alert
-              </button>
-              {showSnoozePicker && (
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  {[3, 7, 14, 30].map((d) => (
-                    <button key={d} onClick={() => { onSnooze(group.name, group.device, d); setShowSnoozePicker(false); }} style={{ fontSize: 11.5, background: "#F0F3F2", border: "1px solid #E1E8E5", borderRadius: 6, padding: "4px 9px" }}>{d}d</button>
-                  ))}
-                </div>
+
+      {/* ── Status & forecast ───────────────────────────────────────────── */}
+      <section style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, padding: 18, marginBottom: 28 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>Status &amp; forecast</div>
+          <div style={{ fontSize: 12, color: THEME.textMuted }}>Based on usage logged in the last 30 days</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+          <ForecastTile label="In stock" value={fmtQty(totalQty)} unit={unit} sub={`Across ${group.items.length} lot${group.items.length === 1 ? "" : "s"} in stock`} tone={totalQty <= 0 ? "red" : null} />
+          <ForecastTile label="Daily use (30 days)" value={fmtQty(avgDaily)} unit={`${unit}/day`} sub={`${fmtQty(consumed30)} ${unit} used in the last 30 days`} />
+          <ForecastTile label="Days left" value={daysLeft === null ? "—" : daysLeft} unit={daysLeft === null ? "" : daysLeft === 1 ? "day" : "days"} sub={daysLeft === null ? "No usage logged in the last 30 days" : "At the current usage rate"} tone={daysTone} />
+          <ForecastTile
+            label="Run-out date"
+            value={runOut === null ? "—" : daysLeft === 0 ? "Now" : fmtDay(runOut)}
+            sub={runOut === null ? "Needs recent usage to estimate" : daysLeft === 0 ? "Nothing left in stock" : daysLeft > 365 ? "Over a year away, if usage stays the same" : "If usage stays at this rate"}
+            tone={daysTone}
+          />
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
+            <span style={{ flexShrink: 0, transform: "translateY(-1px)" }}>{lineDot(lowTone)}</span>
+            <span>{lowText}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
+            <span style={{ flexShrink: 0, transform: "translateY(-1px)" }}>{reorderTone ? lineDot(reorderTone) : <span style={{ width: 7, height: 7, borderRadius: "50%", border: `1.5px solid ${THEME.textMuted}`, display: "inline-block" }} />}</span>
+            <span>{reorderText}</span>
+          </div>
+        </div>
+
+        <button onClick={() => setShowHow((v) => !v)} aria-expanded={showHow} style={{ marginTop: 10, background: "none", border: "none", padding: 0, color: THEME.primary, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <ChevronRight size={14} style={{ transform: showHow ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+          How these numbers are calculated
+        </button>
+
+        {showHow && (
+          <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
+            <HowRow label="In stock">
+              {group.items.map((it, i) => (
+                <span key={it.id}>{i > 0 && " + "}Lot <span style={{ fontFamily: MONO }}>{it.lot_number}</span>: {fmtQty(it.current_quantity)}</span>
+              ))}
+              {" = "}<b style={{ color: THEME.text }}>{fmtQty(totalQty)} {unit}</b>
+              <div>Only lots still in stock are counted. Lots that ran out, were discarded or were removed are not.</div>
+            </HowRow>
+            <HowRow label="Usage, last 30 days">
+              <div>{fmtDay(breakdown.windowStart)} – {fmtDay(breakdown.windowEnd)}: <b style={{ color: THEME.text }}>{fmtQty(consumed30)} {unit}</b> from {breakdown.logCount} usage log{breakdown.logCount === 1 ? "" : "s"}</div>
+              {breakdown.logCount > 0 && (
+                <>
+                  <div>· {fmtQty(breakdown.inStock.amount)} {unit} from lots still in stock ({breakdown.inStock.count} log{breakdown.inStock.count === 1 ? "" : "s"})</div>
+                  <div>· {fmtQty(breakdown.ended.amount)} {unit} from lots that have since run out, been discarded or removed ({breakdown.ended.count} log{breakdown.ended.count === 1 ? "" : "s"})</div>
+                  {breakdown.stockCount.count > 0 && (
+                    <div>· Of the total, {fmtQty(breakdown.stockCount.amount)} {unit} ({breakdown.stockCount.count} log{breakdown.stockCount.count === 1 ? "" : "s"}) {breakdown.stockCount.count === 1 ? "was" : "were"} recorded by stock-count corrections</div>
+                  )}
+                </>
               )}
-            </>
-          )}
-        </div>
-      )}
+              <div>Undone entries and future-dated entries are not counted.</div>
+            </HowRow>
+            <HowRow label="Daily use">
+              {fmtQty(consumed30)} {unit} ÷ 30 days = <b style={{ color: THEME.text }}>{fmtQty(avgDaily, 3)} {unit}/day</b>
+            </HowRow>
+            <HowRow label="Days left">
+              {avgDaily > 0 ? (
+                <>{fmtQty(totalQty)} {unit} ÷ {fmtQty(avgDaily, 3)} {unit}/day = {fmtQty(totalQty / avgDaily)}, rounded down to <b style={{ color: THEME.text }}>{daysLeft} day{daysLeft === 1 ? "" : "s"}</b></>
+              ) : (
+                <>No usage in the last 30 days, so there is no estimate.</>
+              )}
+            </HowRow>
+            <HowRow label="Run-out date">
+              {runOut !== null ? (
+                <>Today ({fmtDay(today)}) + {daysLeft} day{daysLeft === 1 ? "" : "s"} = <b style={{ color: THEME.text }}>{fmtDay(runOut)}</b></>
+              ) : (
+                <>Needs a days-left estimate.</>
+              )}
+            </HowRow>
+            <HowRow label="Low stock">
+              Low stock when stock is above 0 and at or below the threshold. The threshold comes from the next lot to use{nextLot ? <> (lot <span style={{ fontFamily: MONO }}>{nextLot.lot_number}</span>: {fmtQty(threshold)} {unit})</> : null}. Now: {fmtQty(totalQty)} {unit} → <b style={{ color: THEME.text }}>{totalQty <= 0 ? "out of stock" : group.lowStockRaw ? "low stock" : "not low"}</b>
+              {group.snoozedUntil ? <>, alert snoozed until {group.snoozedUntil}</> : null}.
+            </HowRow>
+            <HowRow label="Reorder">
+              {avgDaily > 0 ? (
+                <>
+                  Target = {fmtQty(avgDaily, 3)} {unit}/day × {coverageDays} days, rounded up = {fmtQty(reorder.target)} {unit}. Suggested = {fmtQty(reorder.target)} − {fmtQty(totalQty)} in stock = {fmtQty(reorder.suggestedQty)} → <b style={{ color: THEME.text }}>{reorder.needed ? `order ${fmtQty(reorder.suggestedQty)} ${unit}` : "no order needed"}</b>
+                  <div>Coverage of {coverageDays} days is set in Settings. Same formula as the Reorder page.</div>
+                </>
+              ) : (
+                <>No usage in the last 30 days, so no reorder is suggested. Same rule as the Reorder page.</>
+              )}
+            </HowRow>
+          </div>
+        )}
+      </section>
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
-        <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>
-          <div style={{ fontSize: 11, color: "#8A9694", fontWeight: 600, textTransform: "uppercase" }}>Avg daily use (30d)</div>
-          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{avgDaily.toFixed(1)} <span style={{ fontSize: 13, fontWeight: 500 }}>{group.unit}/day</span></div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>
-          <div style={{ fontSize: 11, color: "#8A9694", fontWeight: 600, textTransform: "uppercase" }}>Projected runout</div>
-          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{daysLeft !== null ? `${daysLeft}d` : "—"}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 10, padding: "14px 16px", flex: 1, minWidth: 150 }}>
-          <div style={{ fontSize: 11, color: "#8A9694", fontWeight: 600, textTransform: "uppercase" }}>Consumed (last 30 days)</div>
-          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{consumed30} <span style={{ fontSize: 13, fontWeight: 500 }}>{group.unit}</span></div>
-        </div>
-      </div>
-
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>LOTS — use earliest expiry first (FEFO)</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 26 }}>
+      {/* ── Lots (in stock, FEFO) ───────────────────────────────────────── */}
+      <div style={sectionHeading}>Lots — use earliest expiry first (FEFO)</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
         {group.items.map((it, idx) => {
           const dExp = it.expiry_date ? daysBetween(it.expiry_date, todayISO()) : null;
-          const m = STATUS_META[statusOf(it, warnDays)];
+          const lotStatus = statusOf(it, warnDays);
+          const lotTone = DASH_TONE[lotStatus] || DASH_TONE.green;
           const failedItems = INSPECTION_KEYS.filter((k) => it[k] === false).map((k) => inspectionLabels[k]);
           return (
-            <div key={it.id} style={{ background: "#fff", border: "1px solid #E1E8E5", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {idx === 0 && <span style={{ background: "#0F7173", color: "#fff", fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4 }}>USE FIRST</span>}
-                <div style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>Lot {it.lot_number}</div>
-                <div style={{ textAlign: "right", fontSize: 13 }}>
+            <div key={it.id} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                {idx === 0 && <span style={{ background: THEME.primary, color: THEME.cardBg, fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4, letterSpacing: 0.3 }}>USE FIRST</span>}
+                <div style={{ flex: 1, minWidth: 90, fontFamily: MONO, fontSize: 13, color: THEME.text }}>Lot {it.lot_number}</div>
+                <div style={{ textAlign: "right", fontSize: 13, color: THEME.text, fontWeight: 600 }}>
                   {(() => {
                     const q = formatCartonQty(it.current_quantity, it.units_per_carton, it.unit);
-                    return <>{q.main}{q.sub && <div style={{ fontSize: 10.5, color: "#8A9694" }}>{q.sub}</div>}</>;
+                    return <>{q.main}{q.sub && <div style={{ fontSize: 10.5, color: THEME.textMuted, fontWeight: 400 }}>{q.sub}</div>}</>;
                   })()}
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 12.5, color: m.color, fontWeight: 600 }}>
+                <div style={{ textAlign: "right", minWidth: 80 }}>
+                  <div style={{ fontSize: 12.5, color: lotTone.color, fontWeight: 600 }}>
                     {it.current_quantity <= 0 ? "Out of stock" : dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `${dExp}d left`}
                   </div>
-                  {it.expiry_date && <div style={{ fontSize: 10.5, color: "#8A9694", marginTop: 1 }}>{it.expiry_date}</div>}
+                  {it.expiry_date && <div style={{ fontSize: 11, color: THEME.textMuted, marginTop: 1, fontFamily: MONO }}>{it.expiry_date}</div>}
                 </div>
-                {can("edit") && <button onClick={() => onEditReagent(it)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={14} /></button>}
-                {can("discard") && <button onClick={() => onDiscardReagent(it)} title="Discard (expired/damaged)" style={{ background: "none", border: "none", color: "#C1432B" }}><Ban size={14} /></button>}
-                {can("delete") && <button onClick={() => onDeleteReagent(it.id)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={14} /></button>}
+                {can("edit") && <button onClick={() => onEditReagent(it)} title="Edit this lot" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={14} /></button>}
+                {can("discard") && <button onClick={() => onDiscardReagent(it)} title="Discard (expired/damaged)" style={{ ...iconBtn, color: "var(--critical)" }}><Ban size={14} /></button>}
+                {can("delete") && <button onClick={() => onDeleteReagent(it.id)} title="Delete this lot" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={14} /></button>}
               </div>
               {failedItems.length > 0 && (
-                <div style={{ marginTop: 8, background: "#FBF3DF", border: "1px solid #B8860B33", borderRadius: 6, padding: "6px 10px", fontSize: 11.5, color: "#7A5C08" }}>
-                  ⚠ Inspection issue: {failedItems.join(", ")}
+                <div style={{ marginTop: 10, background: "var(--warning-soft)", borderRadius: 6, padding: "7px 10px", fontSize: 12, color: THEME.text, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                  <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span>Inspection issue: {failedItems.join(", ")}</span>
                 </div>
               )}
               {(it.receiving_notes || it.inspection_notes) && (
-                <div style={{ marginTop: 8, fontSize: 11.5, color: "#516361" }}>
-                  {it.receiving_notes && <div><b>Note:</b> {it.receiving_notes}</div>}
-                  {it.inspection_notes && <div><b>Inspection note:</b> {it.inspection_notes}</div>}
+                <div style={{ marginTop: 8, fontSize: 12, color: THEME.textMuted, lineHeight: 1.5 }}>
+                  {it.receiving_notes && <div><b style={{ color: THEME.text }}>Note:</b> {it.receiving_notes}</div>}
+                  {it.inspection_notes && <div><b style={{ color: THEME.text }}>Inspection note:</b> {it.inspection_notes}</div>}
                 </div>
               )}
             </div>
@@ -2189,17 +2358,18 @@ function DetailView({ group, logs, can, warnDays, onBack, onEditReagent, onDelet
         })}
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, letterSpacing: 0.3 }}>CONSUMPTION HISTORY</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {logs.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No usage logged yet.</div>}
-        {[...logs].sort((a, b) => new Date(b.date) - new Date(a.date)).map((l) => (
-          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, padding: "8px 0", borderBottom: "1px solid #EEF2F0" }}>
-            <div style={{ width: 90, color: "#8A9694", fontFamily: "'IBM Plex Mono', monospace" }}>{l.date}</div>
-            <div style={{ flex: 1 }}>−{l.amount} {group.unit}</div>
-            <div style={{ color: "#7B8E8A", display: "flex", alignItems: "center", gap: 4 }}><Users size={12} /> {l.used_by}</div>
-            <div style={{ fontSize: 11, color: l.tested_by_qc ? "#2F6B4F" : "#8A9694", fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
-            {can("edit") && <button onClick={() => onEditLog(l)} style={{ background: "none", border: "none", color: "#8A9694" }}><Pencil size={13} /></button>}
-            {can("delete") && <button onClick={() => onDeleteLog(l)} style={{ background: "none", border: "none", color: "#C1432B" }}><Trash2 size={13} /></button>}
+      {/* ── Consumption history (lots in stock) ─────────────────────────── */}
+      <div style={sectionHeading}>Consumption history</div>
+      <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
+        {logs.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted, padding: "12px 0" }}>No usage logged yet.</div>}
+        {[...logs].sort((a, b) => new Date(b.date) - new Date(a.date)).map((l, i) => (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${THEME.cardBorder}`, flexWrap: "wrap" }}>
+            <div style={{ width: 90, color: THEME.textMuted, fontFamily: MONO }}>{l.date}</div>
+            <div style={{ flex: 1, minWidth: 70, color: THEME.text, fontWeight: 600 }}>−{l.amount} {group.unit}</div>
+            <div style={{ color: THEME.textMuted, display: "flex", alignItems: "center", gap: 4 }}><Users size={12} /> {l.used_by}</div>
+            <div style={{ fontSize: 11, color: l.tested_by_qc ? "var(--success)" : THEME.textMuted, fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
+            {can("edit") && <button onClick={() => onEditLog(l)} title="Edit this entry" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={13} /></button>}
+            {can("delete") && <button onClick={() => onDeleteLog(l)} title="Delete this entry" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={13} /></button>}
           </div>
         ))}
       </div>
