@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -2121,9 +2121,41 @@ function HowRow({ label, children }) {
 
 const sectionHeading = { fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: THEME.textMuted, margin: "0 0 10px" };
 
+// Local-date display for stored timestamps (e.g. deleted_at, edited_at).
+function fmtTimestampDay(ts) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+// Lot lifecycle status labels/tones for the "All lots" view (see forecast.js lotStatus).
+const LOT_STATUS_META = {
+  in_stock: { label: "In stock", tone: "green" },
+  in_use: { label: "In use on device", tone: "primary" },
+  empty: { label: "Empty", tone: "red" },
+  expired: { label: "Expired, still in stock", tone: "red" },
+  discarded: { label: "Discarded", tone: "expiring" },
+  ran_out: { label: "Ran out", tone: null },
+  removed: { label: "Removed", tone: null },
+};
+
+function LotFact({ label, children, note }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", color: THEME.textMuted, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 12.5, color: THEME.text, lineHeight: 1.45 }}>{children}</div>
+      {note && <div style={{ fontSize: 11.5, color: THEME.textMuted, marginTop: 2, lineHeight: 1.4 }}>{note}</div>}
+    </div>
+  );
+}
+
+function MutedTag({ children }) {
+  return <span style={{ fontSize: 10.5, fontWeight: 600, color: THEME.textMuted, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 4, padding: "0 6px", whiteSpace: "nowrap", lineHeight: 1.6 }}>{children}</span>;
+}
+
 function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warnDays, onBack, onEditReagent, onDeleteReagent, onDiscardReagent, onEditLog, onDeleteLog, onSnooze, onUnsnooze }) {
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [showHow, setShowHow] = useState(false);
+  const [lotView, setLotView] = useState("in_stock"); // in_stock | all
 
   // All forecast values come from App's shared `groups` (forecast.js) — the
   // same numbers the Dashboard, Reorder and the public summary show.
@@ -2136,6 +2168,26 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const runOut = runOutDate(today, daysLeft);
   const breakdown = usageBreakdown(group.key, allReagents, allLogs, today);
   const reorder = reorderSuggestion(avgDaily, totalQty, coverageDays);
+  // Full lot history and usage history across ALL of this reagent's lots,
+  // including ended ones (read-only; see forecast.js).
+  const lotHist = lotHistory(group.key, allReagents, allLogs, today);
+  const historyRows = groupLogsWithLots(group.key, allReagents, allLogs);
+  const endedLotCount = lotHist.filter((e) => !e.active).length;
+  const lotStatusLabel = (e) => (e.status === "discarded" && e.ended?.detail ? `Discarded (${e.ended.detail})` : (LOT_STATUS_META[e.status] || LOT_STATUS_META.in_stock).label);
+  // Lot numbers aren't unique in the data (e.g. two CLEANER lots both "628022").
+  // Wherever a lot is named (history rows, lot-to-lot links), a repeated number
+  // gets a short discriminator — status, then received date, then an ordinal —
+  // never an internal id.
+  const lotDisc = lotDiscriminators(lotHist);
+  const lotLabel = (lotId, lotNumber) => {
+    const d = lotDisc[lotId];
+    if (!d) return lotNumber;
+    let s = `${lotNumber} · ${(LOT_STATUS_META[d.status] || LOT_STATUS_META.in_stock).label}`;
+    if (d.receivedDate) s += ` · received ${fmtDay(d.receivedDate)}`;
+    if (d.ordinal) s += ` · #${d.ordinal}`;
+    return s;
+  };
+  const linkedLotLabel = (r) => (r.lotNumber === null ? "(a lot no longer on record)" : lotLabel(r.lotId, r.lotNumber));
   const nextLot = group.fefo || group.items[0];
   const threshold = nextLot ? nextLot.low_stock_threshold : null;
   const statusTone = DASH_TONE[group.status] || DASH_TONE.green;
@@ -2312,8 +2364,24 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         )}
       </section>
 
-      {/* ── Lots (in stock, FEFO) ───────────────────────────────────────── */}
-      <div style={sectionHeading}>Lots — use earliest expiry first (FEFO)</div>
+      {/* ── Lots: in stock (FEFO) | all lots (history) ──────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ ...sectionHeading, margin: 0 }}>{lotView === "in_stock" ? "Lots — use earliest expiry first (FEFO)" : "All lots — newest received first"}</div>
+        <div role="tablist" style={{ display: "inline-flex", background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 7, padding: 2 }}>
+          {[["in_stock", `In stock (${group.items.length})`], ["all", `All lots (${lotHist.length})`]].map(([key, label]) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={lotView === key}
+              onClick={() => setLotView(key)}
+              style={{ background: lotView === key ? THEME.cardBg : "transparent", color: lotView === key ? THEME.text : THEME.textMuted, border: "none", borderRadius: 5, padding: "5px 11px", fontSize: 12, fontWeight: 600, boxShadow: lotView === key ? THEME.cardShadow : "none" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {lotView === "in_stock" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
         {group.items.map((it, idx) => {
           const dExp = it.expiry_date ? daysBetween(it.expiry_date, todayISO()) : null;
@@ -2357,19 +2425,88 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           );
         })}
       </div>
+      )}
 
-      {/* ── Consumption history (lots in stock) ─────────────────────────── */}
-      <div style={sectionHeading}>Consumption history</div>
+      {lotView === "all" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
+          {lotHist.map((e) => {
+            const meta = LOT_STATUS_META[e.status] || LOT_STATUS_META.in_stock;
+            const statusLabel = lotStatusLabel(e);
+            const endedText = e.ended
+              ? `${fmtTimestampDay(e.ended.at) || "—"} · ${e.ended.kind === "discarded" ? `Discarded${e.ended.detail ? ` (${e.ended.detail})` : ""}` : e.ended.kind === "ran_out" ? "Ran out" : `Removed${e.ended.detail ? ` by ${e.ended.detail}` : ""}`}`
+              : null;
+            return (
+              <div key={e.id} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "12px 14px", opacity: e.active ? 1 : 0.85 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: THEME.text }}>Lot {e.lotNumber}</span>
+                  {meta.tone ? <Tag tone={meta.tone}>{statusLabel}</Tag> : <MutedTag>{statusLabel}</MutedTag>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "10px 18px" }}>
+                  <LotFact label="Received">{e.receivedDate ? fmtDay(e.receivedDate) : "—"}{e.receivedBy ? <span style={{ color: THEME.textMuted }}> · {e.receivedBy}</span> : null}</LotFact>
+                  <LotFact label="First logged use (inferred)">
+                    {e.firstLoggedUse ? fmtDay(e.firstLoggedUse) : e.firstLoggedUseNote === "only_corrections" ? <span style={{ color: THEME.textMuted }}>— (only stock-count corrections)</span> : <span style={{ color: THEME.textMuted }}>— (no usage logged)</span>}
+                  </LotFact>
+                  {e.setActiveDates.length > 0 && (
+                    <LotFact label="Set active on device">{e.setActiveDates.map(fmtDay).join(", ")}</LotFact>
+                  )}
+                  {endedText && <LotFact label="Ended">{endedText}</LotFact>}
+                  <LotFact label="Expiry">{e.expiryDate ? fmtDay(e.expiryDate) : <span style={{ color: THEME.textMuted }}>No expiry</span>}</LotFact>
+                  <LotFact label="Received qty">{fmtQty(e.received)} {unit}</LotFact>
+                  <LotFact
+                    label="Logged usage"
+                    note={e.usage.corrections.count > 0 ? `${fmtQty(e.usage.normal.amount)} from ${e.usage.normal.count} normal log${e.usage.normal.count === 1 ? "" : "s"} · ${fmtQty(e.usage.corrections.amount)} from ${e.usage.corrections.count} stock-count correction${e.usage.corrections.count === 1 ? "" : "s"}` : e.usage.normal.count > 0 ? `${e.usage.normal.count} log${e.usage.normal.count === 1 ? "" : "s"}` : null}
+                  >
+                    {fmtQty(e.usage.total)} {unit}
+                  </LotFact>
+                  <LotFact label={e.active ? "Remaining" : "Left when it ended"}>{fmtQty(e.remaining)} {unit}</LotFact>
+                  {e.edited && <LotFact label="Last edited">{fmtTimestampDay(e.edited.at) || "—"} · {e.edited.by}</LotFact>}
+                </div>
+                {(e.replaced.length > 0 || e.replacedBy.length > 0) && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: THEME.textMuted }}>
+                    {e.replaced.map((r, i) => (
+                      <div key={`p${i}`}>Replaced lot <span style={{ fontFamily: MONO, color: THEME.text }}>{linkedLotLabel(r)}</span> on the device · {fmtDay(r.date)}</div>
+                    ))}
+                    {e.replacedBy.map((r, i) => (
+                      <div key={`n${i}`}>Replaced on the device by lot <span style={{ fontFamily: MONO, color: THEME.text }}>{linkedLotLabel(r)}</span> · {fmtDay(r.date)}</div>
+                    ))}
+                  </div>
+                )}
+                {e.unexplained !== 0 && (
+                  <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.5 }}>
+                    <div style={{ color: THEME.text, fontWeight: 600 }}>
+                      Stock change not explained by usage logs: {e.unexplained > 0 ? "+" : "−"}{fmtQty(Math.abs(e.unexplained))} {unit}
+                    </div>
+                    <div style={{ color: THEME.textMuted }}>
+                      Remaining {fmtQty(e.remaining)} − (received {fmtQty(e.received)} − logged usage {fmtQty(e.usage.total)}). This difference is derived from received quantity, logged usage, and remaining quantity. The exact cause is not determined here.
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Consumption history (all lots; ended lots read-only) ─────────── */}
+      <div style={{ ...sectionHeading, marginBottom: 4 }}>Consumption history ({historyRows.length})</div>
+      {endedLotCount > 0 && <div style={{ fontSize: 12, color: THEME.textMuted, marginBottom: 10 }}>Entries on lots that have ended are read-only here.</div>}
+      {endedLotCount === 0 && <div style={{ height: 6 }} />}
       <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
-        {logs.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted, padding: "12px 0" }}>No usage logged yet.</div>}
-        {[...logs].sort((a, b) => new Date(b.date) - new Date(a.date)).map((l, i) => (
-          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${THEME.cardBorder}`, flexWrap: "wrap" }}>
+        {historyRows.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted, padding: "12px 0" }}>No usage logged yet.</div>}
+        {historyRows.map(({ log: l, lot, lotActive, isCorrection }, i) => (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${THEME.cardBorder}`, flexWrap: "wrap", opacity: lotActive ? 1 : 0.85 }}>
             <div style={{ width: 90, color: THEME.textMuted, fontFamily: MONO }}>{l.date}</div>
+            <div style={{ minWidth: 92, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: THEME.text }}>{lotLabel(lot.id, lot.lot_number)}</span>
+              {!lotActive && <MutedTag>ended</MutedTag>}
+            </div>
             <div style={{ flex: 1, minWidth: 70, color: THEME.text, fontWeight: 600 }}>−{l.amount} {group.unit}</div>
-            <div style={{ color: THEME.textMuted, display: "flex", alignItems: "center", gap: 4 }}><Users size={12} /> {l.used_by}</div>
+            <div style={{ color: THEME.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
+              {isCorrection ? <span title={l.used_by}><MutedTag>Stock-count correction</MutedTag></span> : <><Users size={12} /> {l.used_by}</>}
+            </div>
             <div style={{ fontSize: 11, color: l.tested_by_qc ? "var(--success)" : THEME.textMuted, fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
-            {can("edit") && <button onClick={() => onEditLog(l)} title="Edit this entry" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={13} /></button>}
-            {can("delete") && <button onClick={() => onDeleteLog(l)} title="Delete this entry" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={13} /></button>}
+            {lotActive && can("edit") && <button onClick={() => onEditLog(l)} title="Edit this entry" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={13} /></button>}
+            {lotActive && can("delete") && <button onClick={() => onDeleteLog(l)} title="Delete this entry" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={13} /></button>}
           </div>
         ))}
       </div>
