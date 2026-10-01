@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -2156,6 +2156,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [showHow, setShowHow] = useState(false);
   const [lotView, setLotView] = useState("in_stock"); // in_stock | all
+  const [showExpiryHow, setShowExpiryHow] = useState(false);
 
   // All forecast values come from App's shared `groups` (forecast.js) — the
   // same numbers the Dashboard, Reorder and the public summary show.
@@ -2188,6 +2189,36 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     return s;
   };
   const linkedLotLabel = (r) => (r.lotNumber === null ? "(a lot no longer on record)" : lotLabel(r.lotId, r.lotNumber));
+  // Expiry outlook for the lots in stock — FEFO order from group.items, the
+  // shared forecast rate, and the usage evidence behind that rate. All numbers
+  // shown below come from this output (forecast.js expiryOutlook).
+  const outlook = expiryOutlook(group.items, avgDaily, today, { logCount: breakdown.logCount, stockCountCount: breakdown.stockCount.count });
+  const outlookByLot = Object.fromEntries(outlook.map((o) => [o.lotId, o]));
+  const expiryExc = expiryExceptions(outlook);
+  const logsWord = (n) => `${n} usage log${n === 1 ? "" : "s"}`;
+  const evidenceText = (ev) => `${logsWord(ev.logCount)} in the last 30 days${ev.stockCountCount > 0 ? `, ${ev.stockCountCount} of them stock-count correction${ev.stockCountCount === 1 ? "" : "s"}` : ""}`;
+  const expiresInText = (d) => (d === 0 ? "expires today" : `expires in ${d} day${d === 1 ? "" : "s"}`);
+  const outlookLine = (o) => {
+    if (!o) return null;
+    if (o.state === "used_up_before_expiry") return { tone: "muted", text: "Expected to be used up before expiry" };
+    if (o.state === "may_expire_with_leftover") {
+      return { tone: "warning", text: `May expire with ~${fmtQty(o.expectedLeft)} ${unit} left (at current usage)${o.evidence.logCount < 2 ? ` · low evidence: based on ${logsWord(o.evidence.logCount)}` : ""}` };
+    }
+    if (o.state === "no_recent_usage") return { tone: "muted", text: "Can't estimate — no usage in the last 30 days" };
+    if (o.state === "already_expired") return { tone: "muted", text: "Already expired — left out of the expiry outlook" };
+    return null; // no_expiry: the card already says "no expiry"
+  };
+  // Why the status is Critical / Watch / Stable — mirrors App's `groups` rules
+  // (forecast.js statusReasons); group.status stays the authority.
+  const why = statusReasons(group.items, warnDays, today, !!group.snoozedUntil, group.snoozedUntil);
+  const reasonText = (r) => {
+    if (r.kind === "expired") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> expired {Math.abs(r.days)} day{Math.abs(r.days) === 1 ? "" : "s"} ago → Critical</>;
+    if (r.kind === "empty") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> is empty (0 left) → Critical</>;
+    if (r.kind === "low_stock") return <>Low stock: {fmtQty(r.totalQty)} {unit} left, at or below the threshold of {fmtQty(r.threshold)} {unit} → Watch</>;
+    if (r.kind === "low_stock_snoozed") return <>Low stock ({fmtQty(r.totalQty)} {unit}, threshold {fmtQty(r.threshold)}), but the alert is snoozed{r.snoozedUntil ? ` until ${r.snoozedUntil}` : ""}, so it isn't counted</>;
+    if (r.kind === "expiring_soon") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> {expiresInText(r.days)} (within the {why.warnDays}-day expiry warning) → Watch</>;
+    return null;
+  };
   const nextLot = group.fefo || group.items[0];
   const threshold = nextLot ? nextLot.low_stock_threshold : null;
   const statusTone = DASH_TONE[group.status] || DASH_TONE.green;
@@ -2272,6 +2303,21 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         )}
       </div>
 
+      {/* ── Needs attention (expiry exceptions; hidden when empty) ──────── */}
+      {expiryExc.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={sectionHeading}>Needs attention</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {expiryExc.map((o) => (
+              <ShellAlert key={o.lotId} tone="warning" icon={<Clock size={15} />}>
+                Lot <b style={{ fontFamily: MONO }}>{lotLabel(o.lotId, o.lotNumber)}</b> may expire with ~{fmtQty(o.expectedLeft)} {unit} left — {expiresInText(o.daysToExpiry)} ({fmtDay(o.expiryDate)}).
+                <span style={{ color: THEME.textMuted }}> At the current rate ({fmtQty(o.rate, 3)} {unit}/day, from {evidenceText(o.evidence)}), about {fmtQty(o.expectedUsed)} {unit} is expected to be used before then.</span>
+              </ShellAlert>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Status & forecast ───────────────────────────────────────────── */}
       <section style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, padding: 18, marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
@@ -2309,6 +2355,14 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
 
         {showHow && (
           <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
+            <HowRow label={`Status: ${STATUS_META[group.status]?.label || ""}`}>
+              <div>Critical if any lot in stock is expired or empty; Watch if stock is low (and not snoozed) or a lot expires within {why.warnDays} days; otherwise Stable.</div>
+              {why.reasons.length === 0 ? (
+                <div>No lot is expired, empty or expiring within {why.warnDays} days, and stock isn't low → Stable.</div>
+              ) : (
+                why.reasons.map((r, i) => <div key={i}>· {reasonText(r)}</div>)
+              )}
+            </HowRow>
             <HowRow label="In stock">
               {group.items.map((it, i) => (
                 <span key={it.id}>{i > 0 && " + "}Lot <span style={{ fontFamily: MONO }}>{it.lot_number}</span>: {fmtQty(it.current_quantity)}</span>
@@ -2381,6 +2435,43 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           ))}
         </div>
       </div>
+      {lotView === "in_stock" && outlook.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <button onClick={() => setShowExpiryHow((v) => !v)} aria-expanded={showExpiryHow} style={{ background: "none", border: "none", padding: 0, color: THEME.primary, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <ChevronRight size={14} style={{ transform: showExpiryHow ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+            How the expiry outlook is estimated
+          </button>
+          {showExpiryHow && (
+            <div style={{ marginTop: 8, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
+              <HowRow label="Assumption">
+                Lots are used one at a time, earliest expiry first (FEFO), at the current usage rate. The expiry date itself counts as a usable day. Expired lots are left out. This is an estimate from recent usage, not a prediction of what will happen.
+              </HowRow>
+              <HowRow label="Usage rate">
+                {avgDaily > 0 ? (
+                  <><b style={{ color: THEME.text }}>{fmtQty(avgDaily, 3)} {unit}/day</b> — from {evidenceText(outlook[0].evidence)} (the same rate as the forecast above).</>
+                ) : (
+                  <>No usage in the last 30 days, so no lot can be estimated.</>
+                )}
+              </HowRow>
+              {outlook.map((o) => (
+                <HowRow key={o.lotId} label={<>Lot <span style={{ fontFamily: MONO }}>{lotLabel(o.lotId, o.lotNumber)}</span></>}>
+                  {o.state === "already_expired" && <>Expired {Math.abs(o.daysToExpiry)} day{Math.abs(o.daysToExpiry) === 1 ? "" : "s"} ago — left out of the outlook (expired stock shouldn't be used).</>}
+                  {o.state === "no_recent_usage" && <>{fmtQty(o.qty)} {unit} in stock, {expiresInText(o.daysToExpiry)}. No usage in the last 30 days, so no estimate.</>}
+                  {o.state === "no_expiry" && (o.start === null ? <>{fmtQty(o.qty)} {unit} in stock, no expiry date.</> : <>{fmtQty(o.qty)} {unit} in stock, no expiry date — not at risk of expiring. Used after {fmtQty(o.earlierQty)} {unit} of earlier lots (≈ day {fmtQty(o.start, 1)}).</>)}
+                  {(o.state === "used_up_before_expiry" || o.state === "may_expire_with_leftover") && (
+                    <>
+                      <div>Starts after {fmtQty(o.earlierQty)} {unit} of earlier lots: {fmtQty(o.earlierQty)} ÷ {fmtQty(o.rate, 3)} = day {fmtQty(o.start, 1)}.</div>
+                      <div>{expiresInText(o.daysToExpiry).replace(/^e/, "E")} ({fmtDay(o.expiryDate)}) → usable for {o.daysUsable} day{o.daysUsable === 1 ? "" : "s"} (including the expiry date).</div>
+                      <div>Expected use before expiry: ({o.daysUsable} − {fmtQty(o.start, 1)}) × {fmtQty(o.rate, 3)}, capped at the {fmtQty(o.qty)} {unit} in stock = {fmtQty(o.expectedUsed)} {unit}.</div>
+                      <div>Expected left at expiry: {fmtQty(o.qty)} − {fmtQty(o.expectedUsed)} = <b style={{ color: THEME.text }}>{fmtQty(o.expectedLeft)} {unit}</b> → {o.state === "used_up_before_expiry" ? "expected to be used up before expiry" : "may expire with some left"}.</div>
+                    </>
+                  )}
+                </HowRow>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {lotView === "in_stock" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
         {group.items.map((it, idx) => {
@@ -2409,6 +2500,16 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                 {can("discard") && <button onClick={() => onDiscardReagent(it)} title="Discard (expired/damaged)" style={{ ...iconBtn, color: "var(--critical)" }}><Ban size={14} /></button>}
                 {can("delete") && <button onClick={() => onDeleteReagent(it.id)} title="Delete this lot" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={14} /></button>}
               </div>
+              {(() => {
+                const line = outlookLine(outlookByLot[it.id]);
+                if (!line) return null;
+                return (
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: line.tone === "warning" ? "var(--warning)" : THEME.textMuted, fontWeight: line.tone === "warning" ? 600 : 400 }}>
+                    <Clock size={12} style={{ flexShrink: 0 }} />
+                    <span>{line.text}</span>
+                  </div>
+                );
+              })()}
               {failedItems.length > 0 && (
                 <div style={{ marginTop: 10, background: "var(--warning-soft)", borderRadius: 6, padding: "7px 10px", fontSize: 12, color: THEME.text, display: "flex", gap: 6, alignItems: "flex-start" }}>
                   <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />

@@ -268,3 +268,114 @@ export function groupLogsWithLots(groupKey, reagents, logs) {
   }
   return rows.sort((a, b) => new Date(b.log.date) - new Date(a.log.date));
 }
+
+// ─── Expiry outlook (reagent detail page) ───────────────────────────────────
+// Read-only estimate of whether each lot in stock is likely to be used up
+// before it expires, at the reagent's current 30-day usage rate.
+//
+// Assumption (stated in the UI): lots are used one at a time, in the existing
+// FEFO order, at the current rate. `fefoLots` must be the group's active lots
+// ALREADY in FEFO order (App's group.items, sorted by compareLots) — this
+// function does not sort.
+//
+// For each active lot with quantity > 0:
+//   already-expired lots are reported but left out of the usable queue
+//   start        = quantity of earlier usable lots ÷ rate        (days)
+//   finish       = start + this lot's quantity ÷ rate            (days)
+//   daysUsable   = daysToExpiry + 1   (the expiry date itself is still usable)
+//   expectedUsed = clamp((daysUsable − start) × rate, 0, qty)
+//   expectedLeft = qty − expectedUsed  (≤ 0.005 counts as 0)
+//
+// `evidence` = { logCount, stockCountCount } — the valid usage logs behind the
+// rate (usageBreakdown), attached so the UI can show how much data it rests on.
+
+export const EXPIRY_EXCEPTION_MIN_LOGS = 2;
+export const EXPIRY_EXCEPTION_MIN_LEFTOVER = 1;
+
+// Same day arithmetic as App.jsx's daysBetween() (dates parse as UTC midnight).
+function daysBetweenISO(a, b) {
+  return Math.round((new Date(a) - new Date(b)) / 86400000);
+}
+
+export function expiryOutlook(fefoLots, dailyRate, todayISO, evidence) {
+  const rate = dailyRate > 0 ? dailyRate : 0;
+  const ev = { logCount: evidence?.logCount ?? 0, stockCountCount: evidence?.stockCountCount ?? 0 };
+  const out = [];
+  let earlierQty = 0;
+  for (const lot of fefoLots || []) {
+    const qty = Number(lot.current_quantity || 0);
+    if (qty <= 0) continue;
+    const daysToExpiry = lot.expiry_date ? daysBetweenISO(lot.expiry_date, todayISO) : null;
+    const entry = {
+      lotId: lot.id, lotNumber: lot.lot_number, qty, expiryDate: lot.expiry_date || null, daysToExpiry,
+      rate, evidence: ev, earlierQty: null, start: null, finish: null, daysUsable: null,
+      expectedUsed: null, expectedLeft: null, state: null,
+    };
+    if (daysToExpiry !== null && daysToExpiry < 0) { out.push({ ...entry, state: "already_expired" }); continue; }
+    if (rate <= 0) { out.push({ ...entry, state: daysToExpiry === null ? "no_expiry" : "no_recent_usage" }); continue; }
+
+    const start = earlierQty / rate;
+    entry.earlierQty = round2(earlierQty);
+    earlierQty += qty;
+    entry.start = start;
+    entry.finish = earlierQty / rate;
+    if (daysToExpiry === null) { out.push({ ...entry, state: "no_expiry" }); continue; }
+
+    const daysUsable = daysToExpiry + 1;
+    const expectedUsed = Math.min(qty, Math.max(0, (daysUsable - start) * rate));
+    const left = qty - expectedUsed;
+    entry.daysUsable = daysUsable;
+    entry.expectedUsed = round2(expectedUsed);
+    entry.expectedLeft = left > 0.005 ? round2(left) : 0;
+    entry.state = entry.expectedLeft > 0 ? "may_expire_with_leftover" : "used_up_before_expiry";
+    out.push(entry);
+  }
+  return out;
+}
+
+// Lots that qualify for the Exceptions area: a possible leftover at expiry that
+// rests on enough data — at least 2 valid usage logs in the window AND an
+// expected leftover of at least 1 unit. Other estimates still show on the lot.
+// ─── Status reasons (reagent detail page) ───────────────────────────────────
+// Explains App's existing group.status (red = Critical, yellow = Watch,
+// green = Stable). It MIRRORS the rules in App.jsx's `groups` memo exactly —
+// it does not define status; that memo stays authoritative and a test checks
+// both agree for every reagent group:
+//   red    if any active lot is expired (daysToExpiry < 0) or empty (qty ≤ 0)
+//   yellow else if low stock (0 < total ≤ threshold of the FEFO lot, and the
+//          low-stock alert isn't snoozed) or any lot expires within warnDays
+//   green  otherwise
+// `items` = group.items (active lots, FEFO order); `isSnoozed` = an active
+// low-stock snooze exists (App: group.snoozedUntil !== null).
+// Every applicable reason is returned, not just the one that decided status.
+export function statusReasons(items, warnDays, todayISO, isSnoozed, snoozedUntil = null) {
+  const lots = items || [];
+  const reasons = [];
+  for (const i of lots) {
+    if (i.expiry_date && daysBetweenISO(i.expiry_date, todayISO) < 0) reasons.push({ kind: "expired", lotId: i.id, lotNumber: i.lot_number, days: daysBetweenISO(i.expiry_date, todayISO) });
+  }
+  for (const i of lots) {
+    if (i.current_quantity <= 0) reasons.push({ kind: "empty", lotId: i.id, lotNumber: i.lot_number });
+  }
+  const totalQty = lots.reduce((s, i) => s + i.current_quantity, 0);
+  const threshold = lots[0] ? lots[0].low_stock_threshold : null;
+  const lowStockRaw = lots.length > 0 && totalQty > 0 && totalQty <= threshold;
+  if (lowStockRaw && !isSnoozed) reasons.push({ kind: "low_stock", totalQty, threshold, lotNumber: lots[0].lot_number });
+  if (lowStockRaw && isSnoozed) reasons.push({ kind: "low_stock_snoozed", totalQty, threshold, snoozedUntil });
+  for (const i of lots) {
+    if (!i.expiry_date) continue;
+    const d = daysBetweenISO(i.expiry_date, todayISO);
+    if (d >= 0 && d <= warnDays) reasons.push({ kind: "expiring_soon", lotId: i.id, lotNumber: i.lot_number, days: d });
+  }
+  const has = (k) => reasons.some((r) => r.kind === k);
+  const status = has("expired") || has("empty") ? "red" : has("low_stock") || has("expiring_soon") ? "yellow" : "green";
+  return { status, warnDays, reasons };
+}
+
+export function expiryExceptions(outlook) {
+  return (outlook || []).filter((o) =>
+    o.state === "may_expire_with_leftover" &&
+    o.evidence.logCount >= EXPIRY_EXCEPTION_MIN_LOGS &&
+    o.expectedLeft >= EXPIRY_EXCEPTION_MIN_LEFTOVER
+  );
+}
