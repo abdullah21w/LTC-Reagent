@@ -529,3 +529,73 @@ export function stockCountHistory(groupKey, reagents, countLines, logs) {
     },
   };
 }
+
+// ─── Record consistency (reagent detail page) ───────────────────────────────
+// Facts about how lots are recorded that change how this page's stock and
+// forecast should be read. Nothing here merges, converts or recalculates
+// anything: grouping (groupKeyOf) and every forecast value stay as they are.
+
+// Stored units compared with trim + lowercase; the display keeps the first
+// stored spelling seen. Quantities are kept per unit and never added across
+// units (box, Piece, bottle … are never assumed equivalent).
+const normUnit = (u) => String(u ?? "").trim().toLowerCase();
+function quantitiesByUnit(lots) {
+  const byUnit = new Map();
+  for (const r of lots) {
+    const k = normUnit(r.unit);
+    if (!byUnit.has(k)) byUnit.set(k, { unit: String(r.unit ?? "").trim(), qty: 0 });
+    byUnit.get(k).qty += Number(r.current_quantity || 0);
+  }
+  return [...byUnit.values()].map((x) => ({ unit: x.unit, qty: round2(x.qty) }));
+}
+
+// Other groups holding in-stock (not ended) lots of the same reagent name
+// (trim + lowercase) that this group's page doesn't include. Related only when
+//   A. this group or the other group has no device, or
+//   B. both have the same non-blank device and the raw names differ only by
+//      surrounding whitespace / letter case.
+// Two different non-blank devices are never related (e.g. DILUNET on RUBY and
+// on COLTUER are genuinely separate reagents).
+export function relatedStockGroups(groupKey, reagents) {
+  const all = reagents || [];
+  const mine = all.filter((r) => groupKeyOf(r) === groupKey);
+  if (mine.length === 0) return [];
+  const name = mine[0].name, device = mine[0].device || "";
+  const norm = String(name).trim().toLowerCase();
+  const others = {};
+  for (const r of all) {
+    const k = groupKeyOf(r);
+    if (k === groupKey || r.deleted || String(r.name).trim().toLowerCase() !== norm) continue;
+    (others[k] ||= []).push(r);
+  }
+  const out = [];
+  for (const [k, lots] of Object.entries(others)) {
+    const otherDevice = lots[0].device || "";
+    const deviceGap = device === "" || otherDevice === "";
+    const nameVariant = device !== "" && otherDevice === device;
+    if (!deviceGap && !nameVariant) continue;
+    out.push({
+      groupKey: k,
+      name: lots[0].name,
+      device: otherDevice,                 // "" = recorded with no device
+      // Same device on both sides (both blank, or the same device) → only the
+      // name's spacing / letter case keeps the records apart.
+      reason: otherDevice === device ? "name" : "device",
+      activeLots: lots.length,
+      quantities: quantitiesByUnit(lots),
+    });
+  }
+  return out.sort((a, b) => (a.groupKey < b.groupKey ? -1 : 1));
+}
+
+// The distinct stored units of the group's in-stock (not ended) lots, when
+// there is more than one; otherwise null. Ended lots are ignored.
+export function unitMix(items) {
+  const seen = new Map();
+  for (const r of items || []) {
+    if (r.deleted) continue;
+    const k = normUnit(r.unit);
+    if (!seen.has(k)) seen.set(k, String(r.unit ?? "").trim());
+  }
+  return seen.size > 1 ? { units: [...seen.values()] } : null;
+}

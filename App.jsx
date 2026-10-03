@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -2247,6 +2247,20 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     if (e.category === "corrections_only" && e.lastNormalLogDate) s += ` · last normal usage log ${fmtDay(e.lastNormalLogDate)}`;
     return s;
   })();
+  // Batch 6 — record consistency (forecast.js). Facts only: nothing is merged,
+  // converted or recalculated, and no record is called right or wrong.
+  const related = relatedStockGroups(group.key, allReagents);
+  const unitsMixed = unitMix(group.items);
+  const qtyByUnitText = (list) => list.map((q) => `${fmtQty(q.qty)} ${q.unit}`.trim()).join(", ");
+  const relatedText = related.length === 0 ? null : (() => {
+    const parts = related.map((o) => {
+      const lots = `${o.activeLots} ${o.name.trim()} lot${o.activeLots === 1 ? "" : "s"}`;
+      const where = o.reason === "name" ? "under a name that differs only in spacing or capital letters" : o.device === "" ? "with no device" : `on ${o.device}`;
+      return `${lots} ${where} (${qtyByUnitText(o.quantities)})`;
+    });
+    const one = related.length === 1 && related[0].activeLots === 1;
+    return `${parts.join("; ")}. ${one ? "It's a separate record, so it isn't" : "They're separate records, so they aren't"} included in this page's stock, forecast or reorder.`;
+  })();
   const evidenceText = (ev) => `${logsWord(ev.logCount)} in the last 30 days${ev.stockCountCount > 0 ? `, ${ev.stockCountCount} of them stock-count correction${ev.stockCountCount === 1 ? "" : "s"}` : ""}`;
   // Batch 5 — stock count history (forecast.js stockCountHistory). Facts only:
   // the stored quantities and resolution; no cause is inferred or shown.
@@ -2467,6 +2481,12 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         <div style={{ fontSize: 12, color: THEME.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
           <span style={{ fontWeight: 600, color: THEME.text }}>Evidence: </span>{forecastEvidenceText}
         </div>
+        {(relatedText || unitsMixed) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: THEME.textMuted, lineHeight: 1.5 }}>
+            {relatedText && <div><span style={{ fontWeight: 600, color: THEME.text }}>Also recorded separately: </span>{relatedText}</div>}
+            {unitsMixed && <div><span style={{ fontWeight: 600, color: THEME.text }}>Units: </span>In-stock lots use different units ({unitsMixed.units.join(", ")}); the stock total adds them as recorded.</div>}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 6 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
