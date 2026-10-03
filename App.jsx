@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -2195,7 +2195,26 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const outlook = expiryOutlook(group.items, avgDaily, today, { logCount: breakdown.logCount, stockCountCount: breakdown.stockCount.count });
   const outlookByLot = Object.fromEntries(outlook.map((o) => [o.lotId, o]));
   const expiryExc = expiryExceptions(outlook);
+  // Batch 4 — evidence behind the forecast (M1) and the stock the forecast
+  // still counts although it is expired or may expire first (M2 / S1).
+  // Informational only: the forecast numbers themselves are unchanged.
+  const evidence = usageEvidence(group.key, allReagents, allLogs, today);
+  const risk = stockAtRisk(outlook);
   const logsWord = (n) => `${n} usage log${n === 1 ? "" : "s"}`;
+  const daysAgo = (n) => (n === 0 ? "today" : `${n} day${n === 1 ? "" : "s"} ago`);
+  const forecastEvidenceText = (() => {
+    const e = evidence;
+    const last = e.lastLogDate ? `most recent usage logged ${fmtDay(e.lastLogDate)} (${daysAgo(e.daysSinceLastLog)})` : null;
+    if (e.category === "none") return last ? `No usage logged in the last 30 days · ${last}` : "No usage has ever been logged for this reagent";
+    let s;
+    if (e.category === "corrections_only") s = `Based on ${logsWord(e.logCount)} in the last 30 days, ${e.logCount === 1 ? "a stock-count correction" : e.logCount === 2 ? "both stock-count corrections" : `all ${e.logCount} stock-count corrections`}`;
+    else if (e.category === "single_log") s = "Based on 1 normal usage log in the last 30 days";
+    else if (e.correctionCount === 0) s = `Based on ${e.logCount} normal usage logs in the last 30 days`;
+    else s = `Based on ${logsWord(e.logCount)} in the last 30 days: ${e.normalCount} normal, ${e.correctionCount} stock-count correction${e.correctionCount === 1 ? "" : "s"}`;
+    if (last) s += ` · ${last}`;
+    if (e.category === "corrections_only" && e.lastNormalLogDate) s += ` · last normal usage log ${fmtDay(e.lastNormalLogDate)}`;
+    return s;
+  })();
   const evidenceText = (ev) => `${logsWord(ev.logCount)} in the last 30 days${ev.stockCountCount > 0 ? `, ${ev.stockCountCount} of them stock-count correction${ev.stockCountCount === 1 ? "" : "s"}` : ""}`;
   const expiresInText = (d) => (d === 0 ? "expires today" : `expires in ${d} day${d === 1 ? "" : "s"}`);
   const outlookLine = (o) => {
@@ -2303,11 +2322,16 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         )}
       </div>
 
-      {/* ── Needs attention (expiry exceptions; hidden when empty) ──────── */}
-      {expiryExc.length > 0 && (
+      {/* ── Needs attention (expired stock + expiry exceptions; hidden when empty) */}
+      {(risk.expiredLots.length > 0 || expiryExc.length > 0) && (
         <div style={{ marginBottom: 20 }}>
           <div style={sectionHeading}>Needs attention</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {risk.expiredLots.map((x) => (
+              <ShellAlert key={`expired-${x.lotId}`} tone="critical" icon={<AlertTriangle size={15} />}>
+                Lot <b style={{ fontFamily: MONO }}>{lotLabel(x.lotId, x.lotNumber)}</b> expired {daysAgo(Math.abs(x.daysToExpiry))} ({fmtDay(x.expiryDate)}) — <b>{fmtQty(x.qty)} {unit}</b> still in stock.
+              </ShellAlert>
+            ))}
             {expiryExc.map((o) => (
               <ShellAlert key={o.lotId} tone="warning" icon={<Clock size={15} />}>
                 Lot <b style={{ fontFamily: MONO }}>{lotLabel(o.lotId, o.lotNumber)}</b> may expire with ~{fmtQty(o.expectedLeft)} {unit} left — {expiresInText(o.daysToExpiry)} ({fmtDay(o.expiryDate)}).
@@ -2335,6 +2359,26 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
             sub={runOut === null ? "Needs recent usage to estimate" : daysLeft === 0 ? "Nothing left in stock" : daysLeft > 365 ? "Over a year away, if usage stays the same" : "If usage stays at this rate"}
             tone={daysTone}
           />
+        </div>
+
+        {(risk.expiredQty > 0 || risk.mayExpireQty > 0) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, background: "var(--warning-soft)", borderRadius: 8, padding: "9px 12px" }}>
+            {risk.expiredQty > 0 && (
+              <div style={{ display: "flex", gap: 8, fontSize: 12.5, color: THEME.text, lineHeight: 1.5 }}>
+                <AlertTriangle size={14} color="var(--critical)" style={{ flexShrink: 0, marginTop: 3 }} />
+                <span><b>{fmtQty(risk.expiredQty)} of {fmtQty(totalQty)} {unit} in stock is past its expiry date</b> and shouldn't be used. Days left and the run-out date above still include it, because they are stock ÷ usage rate.</span>
+              </div>
+            )}
+            {risk.mayExpireQty > 0 && (
+              <div style={{ display: "flex", gap: 8, fontSize: 12.5, color: THEME.text, lineHeight: 1.5 }}>
+                <Clock size={14} color="var(--warning)" style={{ flexShrink: 0, marginTop: 3 }} />
+                <span>About <b>{fmtQty(risk.mayExpireQty)} of {fmtQty(totalQty)} {unit}</b> may expire before it's used (see Lots). The run-out date assumes all of it gets used.{risk.lowEvidence ? ` · low evidence: based on ${logsWord(evidence.logCount)}` : ""}</span>
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: THEME.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+          <span style={{ fontWeight: 600, color: THEME.text }}>Evidence: </span>{forecastEvidenceText}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 6 }}>

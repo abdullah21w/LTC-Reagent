@@ -379,3 +379,57 @@ export function expiryExceptions(outlook) {
     o.expectedLeft >= EXPIRY_EXCEPTION_MIN_LEFTOVER
   );
 }
+
+// ─── Forecast evidence (reagent detail page) ────────────────────────────────
+// Describes the data behind the 30-day forecast, without scoring it. The
+// window counts come straight from usageBreakdown (same rules, same window),
+// so they always match the forecast. The "most recent" dates look at all of
+// the group's valid logs up to today (any lot, active or ended; undone,
+// orphan and future-dated logs excluded).
+//
+// category: "none"             — no valid logs in the 30-day window
+//           "corrections_only" — every log in the window is a stock-count correction
+//           "single_log"       — exactly one (normal) log in the window
+//           "multiple_logs"    — two or more logs in the window
+export function usageEvidence(groupKey, reagents, logs, todayISO) {
+  const b = usageBreakdown(groupKey, reagents, logs, todayISO);
+  const lotIds = new Set((reagents || []).filter((r) => groupKeyOf(r) === groupKey).map((r) => r.id));
+  let lastLogDate = null, lastNormalLogDate = null;
+  for (const l of logs || []) {
+    if (l.deleted || !l.date || l.date > todayISO || !lotIds.has(l.reagent_id)) continue;
+    if (!lastLogDate || l.date > lastLogDate) lastLogDate = l.date;
+    if (!isStockCountCorrection(l) && (!lastNormalLogDate || l.date > lastNormalLogDate)) lastNormalLogDate = l.date;
+  }
+  const logCount = b.logCount;
+  const correctionCount = b.stockCount.count;
+  const normalCount = logCount - correctionCount;
+  const category = logCount === 0 ? "none" : normalCount === 0 ? "corrections_only" : logCount === 1 ? "single_log" : "multiple_logs";
+  return {
+    windowStart: b.windowStart, windowEnd: b.windowEnd,
+    logCount, normalCount, correctionCount, amount: b.total,
+    lastLogDate, lastNormalLogDate,
+    daysSinceLastLog: lastLogDate ? daysBetweenISO(todayISO, lastLogDate) : null,
+    category,
+  };
+}
+
+// ─── Stock at risk (reagent detail page) ────────────────────────────────────
+// Totals taken ONLY from an expiryOutlook() result, so they reconcile with it
+// exactly: stock already past expiry (still counted in stock and therefore in
+// the forecast's days left / run-out date) and stock that may expire before
+// it is used. Nothing is recalculated here.
+export function stockAtRisk(outlook) {
+  const list = outlook || [];
+  const expiredLots = list.filter((o) => o.state === "already_expired")
+    .map((o) => ({ lotId: o.lotId, lotNumber: o.lotNumber, qty: o.qty, expiryDate: o.expiryDate, daysToExpiry: o.daysToExpiry }));
+  const mayExpireLots = list.filter((o) => o.state === "may_expire_with_leftover")
+    .map((o) => ({ lotId: o.lotId, lotNumber: o.lotNumber, expectedLeft: o.expectedLeft, evidence: o.evidence }));
+  return {
+    expiredQty: round2(expiredLots.reduce((s, o) => s + o.qty, 0)),
+    expiredLots,
+    mayExpireQty: round2(mayExpireLots.reduce((s, o) => s + o.expectedLeft, 0)),
+    mayExpireLots,
+    // all may-expire lots share the group's rate, so they share its evidence
+    lowEvidence: mayExpireLots.length > 0 && mayExpireLots[0].evidence.logCount < EXPIRY_EXCEPTION_MIN_LOGS,
+  };
+}
