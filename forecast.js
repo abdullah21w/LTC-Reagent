@@ -433,3 +433,99 @@ export function stockAtRisk(outlook) {
     lowEvidence: mayExpireLots.length > 0 && mayExpireLots[0].evidence.logCount < EXPIRY_EXCEPTION_MIN_LOGS,
   };
 }
+
+// ─── Stock count history (reagent detail page) ──────────────────────────────
+// Reads the resolution_note text Stock Count stores on a count line. Parsed at
+// display time because a later date edit on a completed count rewrites it.
+// type: "usage_exact" | "usage_spread" | "corrected" | "kept_system" | "none"
+//       | "other" (any other text, kept verbatim in `raw`). "unresolved" is
+//       decided by stockCountHistory, which knows whether the line differed.
+export function parseCountResolution(note) {
+  const raw = note == null ? null : String(note);
+  const text = (raw || "").trim();
+  if (!text) return { type: "none", raw };
+  let m = text.match(/^Logged as usage on (\d{4}-\d{2}-\d{2})$/);
+  if (m) return { type: "usage_exact", date: m[1], raw };
+  m = text.match(/^Logged as usage spread from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})$/);
+  if (m) return { type: "usage_spread", from: m[1], to: m[2], raw };
+  if (text === "Corrected to match count") return { type: "corrected", raw };
+  if (text === "Kept system value") return { type: "kept_system", raw };
+  return { type: "other", raw };
+}
+
+// Completed physical counts that included this group's lots, newest first.
+// A count line belongs to the group only through its reagent_id → a lot row of
+// this group (active or ended), never by name or lot number: lot numbers repeat
+// and names exist on several devices. Lines whose reagent_id is null or not a
+// lot of this group are left out. `countLines` are inventory_count_items rows
+// with their count joined as `inventory_counts`; counts that aren't completed
+// are left out here. Everything is a stored fact:
+//   expected — the system quantity snapshotted when the count STARTED
+//   diff     — counted − expected (2 dp); kind: match / shortage / surplus /
+//              not_counted. No cause is inferred.
+//   loggedDuringCount — normal usage logs (not undone, not stock-count
+//              corrections) on that same lot created while the count was open
+//              (started_at … completed_at). Context only: nothing is adjusted.
+export function stockCountHistory(groupKey, reagents, countLines, logs) {
+  const lotById = {};
+  for (const r of reagents || []) if (groupKeyOf(r) === groupKey) lotById[r.id] = r;
+  const ms = (ts) => (ts ? Date.parse(ts) : NaN);
+
+  const byCount = {};
+  for (const line of countLines || []) {
+    const lot = line.reagent_id ? lotById[line.reagent_id] : null;
+    if (!lot) continue;
+    const c = Array.isArray(line.inventory_counts) ? line.inventory_counts[0] : line.inventory_counts;
+    if (!c || c.status !== "completed") continue;
+
+    const expected = Number(line.expected_quantity);
+    const counted = line.counted_quantity === null || line.counted_quantity === undefined ? null : Number(line.counted_quantity);
+    const diff = counted === null ? null : round2(counted - expected) || 0; // no "-0"
+    const kind = counted === null ? "not_counted" : diff === 0 ? "match" : diff < 0 ? "shortage" : "surplus";
+    let resolution = parseCountResolution(line.resolution_note);
+    if ((kind === "shortage" || kind === "surplus") && (!line.resolved || resolution.type === "none")) resolution = { type: "unresolved", raw: resolution.raw };
+
+    const from = ms(c.started_at), to = ms(c.completed_at);
+    const during = Number.isNaN(from) || Number.isNaN(to) ? [] : (logs || []).filter((l) => {
+      if (l.deleted || l.reagent_id !== line.reagent_id || isStockCountCorrection(l)) return false;
+      const t = ms(l.created_at);
+      return t >= from && t <= to;
+    });
+
+    const entry = (byCount[line.count_id] ||= {
+      countId: line.count_id,
+      department: c.department ?? null,
+      startedAt: c.started_at || null,
+      completedAt: c.completed_at || null,
+      lines: [],
+      discrepancyCount: 0,
+    });
+    entry.lines.push({
+      lineId: line.id,
+      lotId: line.reagent_id,
+      lotNumber: line.lot_number,
+      lotEnded: !!lot.deleted,
+      unit: line.unit,
+      expected,
+      counted,
+      diff,
+      kind,
+      resolution,
+      loggedDuringCount: { count: during.length, amount: round2(during.reduce((s, l) => s + Number(l.amount || 0), 0)) },
+    });
+    if (kind === "shortage" || kind === "surplus") entry.discrepancyCount++;
+  }
+
+  const counts = Object.values(byCount);
+  for (const c of counts) c.lines.sort((a, b) => (a.lotNumber === b.lotNumber ? (a.lineId < b.lineId ? -1 : 1) : String(a.lotNumber) < String(b.lotNumber) ? -1 : 1));
+  const when = (c) => ms(c.completedAt || c.startedAt) || 0;
+  counts.sort((a, b) => when(b) - when(a) || (a.countId < b.countId ? -1 : 1));
+  return {
+    counts,
+    summary: {
+      completedCounts: counts.length,
+      countsWithDiscrepancy: counts.filter((c) => c.discrepancyCount > 0).length,
+      lastCompletedAt: counts[0]?.completedAt ?? null,
+    },
+  };
+}

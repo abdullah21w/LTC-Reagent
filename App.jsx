@@ -10,7 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk } from "./forecast";
+import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -2157,6 +2157,38 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const [showHow, setShowHow] = useState(false);
   const [lotView, setLotView] = useState("in_stock"); // in_stock | all
   const [showExpiryHow, setShowExpiryHow] = useState(false);
+  const [showCountHistory, setShowCountHistory] = useState(false);
+
+  // Batch 5 — Stock count history. Read-only, fetched only while this page is
+  // open and only for users who may already see stock counts (stock_count).
+  // Lines are fetched by the reagent_id of EVERY lot of this group (ended lots
+  // included); never by name or lot number. The response is tagged with the
+  // group it was requested for, so a late answer can't show under another
+  // reagent after a quick switch.
+  const canSeeCounts = can("dashboard") && can("stock_count");
+  const countLotIdsKey = useMemo(
+    () => (allReagents || []).filter((r) => groupKeyOf(r) === group.key).map((r) => r.id).sort().join(","),
+    [allReagents, group.key]
+  );
+  const [countFetch, setCountFetch] = useState({ key: null, status: "idle", lines: [] });
+  useEffect(() => {
+    if (!canSeeCounts) return;
+    const key = group.key;
+    const ids = countLotIdsKey ? countLotIdsKey.split(",") : [];
+    if (ids.length === 0) { setCountFetch({ key, status: "ready", lines: [] }); return; }
+    let cancelled = false;
+    setCountFetch({ key, status: "loading", lines: [] });
+    supabase
+      .from("inventory_count_items")
+      .select("id,count_id,reagent_id,lot_number,unit,expected_quantity,counted_quantity,resolved,resolution_note,inventory_counts(status,department,started_at,completed_at)")
+      .in("reagent_id", ids)
+      .then(
+        ({ data, error }) => { if (!cancelled) setCountFetch(error ? { key, status: "error", lines: [] } : { key, status: "ready", lines: data || [] }); },
+        () => { if (!cancelled) setCountFetch({ key, status: "error", lines: [] }); }
+      );
+    return () => { cancelled = true; };
+  }, [canSeeCounts, group.key, countLotIdsKey]);
+  useEffect(() => { setShowCountHistory(false); }, [group.key]);
 
   // All forecast values come from App's shared `groups` (forecast.js) — the
   // same numbers the Dashboard, Reorder and the public summary show.
@@ -2216,6 +2248,61 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     return s;
   })();
   const evidenceText = (ev) => `${logsWord(ev.logCount)} in the last 30 days${ev.stockCountCount > 0 ? `, ${ev.stockCountCount} of them stock-count correction${ev.stockCountCount === 1 ? "" : "s"}` : ""}`;
+  // Batch 5 — stock count history (forecast.js stockCountHistory). Facts only:
+  // the stored quantities and resolution; no cause is inferred or shown.
+  const countState = !canSeeCounts ? null : countFetch.key !== group.key || countFetch.status === "idle" ? "loading" : countFetch.status;
+  const countHist = countState === "ready" ? stockCountHistory(group.key, allReagents, countFetch.lines, allLogs) : null;
+  const countQty = (n, u) => `${fmtQty(n)} ${u || ""}`.trim();
+  const countDiffText = (ln) => (ln.kind === "match" ? "Matched" : ln.kind === "shortage" ? `Shortage of ${countQty(-ln.diff, ln.unit)}` : ln.kind === "surplus" ? `Surplus of ${countQty(ln.diff, ln.unit)}` : "Not counted in this count");
+  const countResolutionText = (r) => {
+    if (r.type === "usage_exact") return `Logged as usage dated ${fmtDay(r.date)}`;
+    if (r.type === "usage_spread") return `Logged as usage, spread ${fmtDay(r.from)} – ${fmtDay(r.to)}`;
+    if (r.type === "corrected") return "Stock corrected to the counted quantity (no usage logged)";
+    if (r.type === "kept_system") return "System quantity kept";
+    if (r.type === "unresolved") return "Not resolved";
+    if (r.type === "other") return r.raw;
+    return null;
+  };
+  const countResolutionShort = (r) => ({ usage_exact: "logged as usage", usage_spread: "logged as usage", corrected: "stock corrected to the count", kept_system: "system quantity kept", unresolved: "not resolved", other: r.raw })[r.type] || null;
+  const countDateText = (c) => {
+    const done = fmtTimestampDay(c.completedAt);
+    const started = fmtTimestampDay(c.startedAt);
+    if (!started || started === done) return `Completed ${done}`;
+    const sameYear = new Date(c.startedAt).getFullYear() === new Date(c.completedAt).getFullYear();
+    return `Completed ${done} (started ${sameYear ? new Date(c.startedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : started})`;
+  };
+  const countDuringText = (ln) => {
+    const d = ln.loggedDuringCount;
+    return `${d.count} usage entr${d.count === 1 ? "y" : "ies"} (${countQty(d.amount, ln.unit)}) ${d.count === 1 ? "was" : "were"} logged on this lot while the count was open. The system quantity above is from when the count started.`;
+  };
+  const countSummaryText = (() => {
+    if (!countHist) return null;
+    const s = countHist.summary;
+    if (s.completedCounts === 0) return "Not part of any completed stock count yet.";
+    const parts = [s.completedCounts === 1 ? "Counted once" : `Counted in ${s.completedCounts} stock counts`];
+    if (s.completedCounts > 1) parts.push(`${s.countsWithDiscrepancy} of them with a discrepancy`);
+    parts.push(`last count ${fmtTimestampDay(s.lastCompletedAt)}`);
+    const latest = countHist.counts[0].lines;
+    if (latest.length === 1) {
+      const ln = latest[0];
+      if (ln.kind === "match") parts.push("matched system quantity");
+      else if (ln.kind === "not_counted") parts.push("not counted");
+      else {
+        const t = countDiffText(ln);
+        parts.push(t.charAt(0).toLowerCase() + t.slice(1));
+        const r = countResolutionShort(ln.resolution);
+        if (r) parts.push(r);
+      }
+    } else {
+      const n = (k) => latest.filter((l) => l.kind === k).length;
+      if (n("match") === latest.length) parts.push(`all ${latest.length} lots matched system quantity`);
+      else {
+        const bits = [[n("match"), "matched"], [n("shortage"), "with a shortage"], [n("surplus"), "with a surplus"], [n("not_counted"), "not counted"]].filter(([k]) => k > 0).map(([k, t]) => `${k} ${t}`);
+        parts.push(`${latest.length} lots: ${bits.join(", ")}`);
+      }
+    }
+    return parts.join(" · ");
+  })();
   const expiresInText = (d) => (d === 0 ? "expires today" : `expires in ${d} day${d === 1 ? "" : "s"}`);
   const outlookLine = (o) => {
     if (!o) return null;
@@ -2630,6 +2717,55 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
             );
           })}
         </div>
+      )}
+
+      {/* ── Stock count history (read-only; needs stock_count) ───────────── */}
+      {canSeeCounts && (
+        <section style={{ marginBottom: 28 }}>
+          <div style={sectionHeading}>Stock count history</div>
+          <div style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "12px 14px" }}>
+            {countState === "loading" && <div style={{ fontSize: 13, color: THEME.textMuted }}>Loading stock count history…</div>}
+            {countState === "error" && <div style={{ fontSize: 13, color: THEME.textMuted }}>Stock count history couldn't be loaded right now. The rest of this page is unaffected.</div>}
+            {countHist && (
+              <>
+                <div style={{ fontSize: 13, color: countHist.summary.completedCounts > 0 ? THEME.text : THEME.textMuted, lineHeight: 1.5 }}>{countSummaryText}</div>
+                {countHist.summary.completedCounts > 0 && (
+                  <button onClick={() => setShowCountHistory((v) => !v)} aria-expanded={showCountHistory} style={{ marginTop: 10, background: "none", border: "none", padding: 0, color: THEME.primary, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <ChevronRight size={14} style={{ transform: showCountHistory ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                    Details of each count
+                  </button>
+                )}
+                {showCountHistory && countHist.counts.map((c) => (
+                  <div key={c.countId} style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "10px 14px" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "4px 10px", flexWrap: "wrap", marginBottom: 2 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: THEME.text }}>{c.department || "Whole lab"} count</span>
+                      <span style={{ fontSize: 12, color: THEME.textMuted }}>{countDateText(c)}</span>
+                    </div>
+                    {c.lines.map((ln) => {
+                      const resText = countResolutionText(ln.resolution);
+                      return (
+                        <div key={ln.lineId} style={{ padding: "9px 0 2px", borderTop: `1px solid ${THEME.cardBorder}`, marginTop: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, color: THEME.text, overflowWrap: "anywhere" }}>Lot {lotLabel(ln.lotId, ln.lotNumber)}</span>
+                            {ln.lotEnded && <MutedTag>ended</MutedTag>}
+                            {ln.kind === "shortage" || ln.kind === "surplus"
+                              ? <span style={{ fontSize: 12.5, fontWeight: 700, color: THEME.text }}>{countDiffText(ln)}</span>
+                              : <MutedTag>{countDiffText(ln)}</MutedTag>}
+                          </div>
+                          <div style={{ fontSize: 12.5, color: THEME.textMuted, marginTop: 4, lineHeight: 1.5 }}>
+                            System qty at count start <b style={{ color: THEME.text }}>{countQty(ln.expected, ln.unit)}</b> → counted <b style={{ color: THEME.text }}>{ln.counted === null ? "—" : countQty(ln.counted, ln.unit)}</b>
+                          </div>
+                          {resText && <div style={{ fontSize: 12.5, color: THEME.text, marginTop: 2, lineHeight: 1.5 }}>{resText}</div>}
+                          {ln.loggedDuringCount.count > 0 && <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 4, lineHeight: 1.5 }}>{countDuringText(ln)}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </section>
       )}
 
       {/* ── Consumption history (all lots; ended lots read-only) ─────────── */}
