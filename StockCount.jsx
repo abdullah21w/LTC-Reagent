@@ -60,6 +60,26 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const [applyingEdits, setApplyingEdits] = useState(false);
   const [editMsg, setEditMsg] = useState("");
   const rowRefs = useRef({});
+  // In-flight guard against double submission (double clicks, or a click
+  // while the first request chain is still running). The ref is the source of
+  // truth and is taken synchronously, before any await; the state copy only
+  // drives the disabled buttons. Released in finally, so a thrown failure
+  // never leaves the action locked. Every write action on one count line
+  // shares one key (line:<id>), so two different resolutions can't overlap.
+  const pendingRef = useRef(new Set());
+  const [pending, setPending] = useState(() => new Set());
+  async function guarded(key, fn) {
+    if (pendingRef.current.has(key)) return;
+    pendingRef.current.add(key);
+    setPending(new Set(pendingRef.current));
+    try {
+      await fn();
+    } finally {
+      pendingRef.current.delete(key);
+      setPending(new Set(pendingRef.current));
+    }
+  }
+  const busy = (key) => pending.has(key);
 
   useEffect(() => { loadSessions(); }, []);
 
@@ -418,7 +438,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
             <option value="all">Whole lab</option>
             {departments.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          <button onClick={startCount} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => guarded("start", startCount)} disabled={busy("start")} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, opacity: busy("start") ? 0.6 : 1 }}>
             <Plus size={15} /> Start new count
           </button>
         </div>
@@ -444,9 +464,10 @@ export default function StockCount({ reagents, departments, username, reload, wa
               </button>
               {s.status !== "completed" && (
                 <button
-                  onClick={() => deleteSession(s)}
+                  onClick={() => guarded(`delete:${s.id}`, () => deleteSession(s))}
+                  disabled={busy(`delete:${s.id}`)}
                   title="Delete this count (only possible while it's still in progress)"
-                  style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderRadius: 10, padding: "0 12px", color: RED }}
+                  style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderRadius: 10, padding: "0 12px", color: RED, opacity: busy(`delete:${s.id}`) ? 0.6 : 1 }}
                 >
                   <Trash2 size={16} />
                 </button>
@@ -559,6 +580,8 @@ export default function StockCount({ reagents, departments, username, reload, wa
           const info = linkedLogs[it.id];
           const draft = edits[it.id];
           const isEditing = editingId === it.id;
+          const lineKey = `line:${it.id}`;
+          const lineBusy = busy(lineKey);
           return (
             <div key={it.id} style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderLeft: `4px solid ${AMBER}`, borderRadius: 8, padding: "12px 16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -585,13 +608,13 @@ export default function StockCount({ reagents, departments, username, reload, wa
                 ) : shortage ? (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={() => { setLoggingItemId(it.id); setLogMode("exact"); setLogDate(todayISO()); setLogRangeFrom(todayISO()); setLogRangeTo(todayISO()); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
-                    <button onClick={() => applyCorrection(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.text, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Correct a logging error</button>
-                    <button onClick={() => dismissDiscrepancy(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Keep system value</button>
+                    <button onClick={() => guarded(lineKey, () => applyCorrection(it))} disabled={lineBusy} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.text, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, opacity: lineBusy ? 0.6 : 1 }}>Correct a logging error</button>
+                    <button onClick={() => guarded(lineKey, () => dismissDiscrepancy(it))} disabled={lineBusy} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, opacity: lineBusy ? 0.6 : 1 }}>Keep system value</button>
                   </div>
                 ) : (
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => applyCorrection(it)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Apply correction</button>
-                    <button onClick={() => dismissDiscrepancy(it)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600 }}>Keep system value</button>
+                    <button onClick={() => guarded(lineKey, () => applyCorrection(it))} disabled={lineBusy} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}>Apply correction</button>
+                    <button onClick={() => guarded(lineKey, () => dismissDiscrepancy(it))} disabled={lineBusy} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, opacity: lineBusy ? 0.6 : 1 }}>Keep system value</button>
                   </div>
                 )}
               </div>
@@ -656,7 +679,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                         onChange={(e) => setLogDate(e.target.value)}
                         style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
                       />
-                      <button onClick={() => logUnrecordedUsage(it, logDate)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
+                      <button onClick={() => guarded(lineKey, () => logUnrecordedUsage(it, logDate))} disabled={lineBusy} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}>Confirm</button>
                       <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
                     </div>
                   ) : (
@@ -678,7 +701,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                         onChange={(e) => setLogRangeTo(e.target.value)}
                         style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
                       />
-                      <button onClick={() => logUnrecordedUsageSpread(it, logRangeFrom, logRangeTo)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Confirm</button>
+                      <button onClick={() => guarded(lineKey, () => logUnrecordedUsageSpread(it, logRangeFrom, logRangeTo))} disabled={lineBusy} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}>Confirm</button>
                       <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
                     </div>
                   )}
@@ -713,20 +736,21 @@ export default function StockCount({ reagents, departments, username, reload, wa
             <div style={{ fontSize: 12, fontWeight: 400, color: T.textMuted }}>Nothing changes in your data until you press Apply.</div>
           </div>
           <button onClick={() => setEdits({})} disabled={applyingEdits} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 }}>Discard all</button>
-          <button onClick={applyAllEdits} disabled={applyingEdits} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, opacity: applyingEdits ? 0.7 : 1 }}>{applyingEdits ? "Applying…" : "Apply all"}</button>
+          <button onClick={() => guarded("apply-edits", applyAllEdits)} disabled={applyingEdits || busy("apply-edits")} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, opacity: applyingEdits ? 0.7 : 1 }}>{applyingEdits ? "Applying…" : "Apply all"}</button>
         </div>
       )}
 
       {activeSession.status !== "completed" && (
         <button
-          onClick={finishSession}
-          disabled={unresolvedDiscrepancies.length > 0}
+          onClick={() => guarded("finish", finishSession)}
+          disabled={unresolvedDiscrepancies.length > 0 || busy("finish")}
           style={{
             background: unresolvedDiscrepancies.length > 0 ? T.cardBorder : T.primary,
             color: unresolvedDiscrepancies.length > 0 ? T.textMuted : "#fff",
             border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, width: "100%",
             display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             cursor: unresolvedDiscrepancies.length > 0 ? "not-allowed" : "pointer",
+            opacity: busy("finish") ? 0.6 : 1,
           }}
         >
           <ClipboardCheck size={16} />
