@@ -3,6 +3,7 @@ import { ClipboardCheck, ScanLine, Search, Check, X, ChevronRight, AlertTriangle
 import { supabase } from "./supabaseClient";
 import BarcodeScanner from "./BarcodeScanner";
 import { buildSpreadEntries } from "./logSpread";
+import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
 
 const T = {
   primary: "var(--primary)",
@@ -46,10 +47,9 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const [showScanner, setShowScanner] = useState(false);
   const [highlightId, setHighlightId] = useState(null);
   const [loggingItemId, setLoggingItemId] = useState(null);
-  const [logMode, setLogMode] = useState("exact"); // exact | range
+  const [logMode, setLogMode] = useState("unknown"); // unknown | exact
   const [logDate, setLogDate] = useState(todayISO());
-  const [logRangeFrom, setLogRangeFrom] = useState(todayISO());
-  const [logRangeTo, setLogRangeTo] = useState(todayISO());
+  const [lineMsg, setLineMsg] = useState({}); // itemId -> why a usage date was refused
   const [linkedLogs, setLinkedLogs] = useState({}); // itemId -> { logs, matched }
   const [edits, setEdits] = useState({}); // itemId -> pending date draft, applied only on approval
   const [editingId, setEditingId] = useState(null);
@@ -82,6 +82,44 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const busy = (key) => pending.has(key);
 
   useEffect(() => { loadSessions(); }, []);
+
+  // Date window for usage corrections (countBounds.js): one read per review
+  // screen — the count lines of the lots shown here, with their counts — to
+  // find each exact lot's previous completed count. Nothing is written.
+  const reviewLotKey = view === "review" && activeSession
+    ? [...new Set(items.map((i) => i.reagent_id).filter(Boolean))].sort().join(",")
+    : "";
+  const priorKey = activeSession ? `${activeSession.id}|${reviewLotKey}` : "";
+  const [priorCounts, setPriorCounts] = useState({ key: "", status: "idle", byLot: {} });
+  useEffect(() => {
+    if (!reviewLotKey) return;
+    const key = priorKey, session = activeSession;
+    let cancelled = false;
+    setPriorCounts({ key, status: "loading", byLot: {} });
+    supabase.from("inventory_count_items").select("reagent_id,count_id,inventory_counts(status,started_at,completed_at)").in("reagent_id", reviewLotKey.split(","))
+      .then(
+        ({ data, error }) => { if (!cancelled) setPriorCounts(error ? { key, status: "error", byLot: {} } : { key, status: "ready", byLot: previousCompletedCounts(data, session) }); },
+        () => { if (!cancelled) setPriorCounts({ key, status: "error", byLot: {} }); }
+      );
+    return () => { cancelled = true; };
+  }, [priorKey]);
+
+  // The window a line's usage may be dated in, or why it isn't available yet.
+  function countWindow(it) {
+    if (priorCounts.key !== priorKey || priorCounts.status === "loading" || priorCounts.status === "idle") return { ok: false, reason: "loading" };
+    if (priorCounts.status === "error") return { ok: false, reason: "error" };
+    return usageInterval({ lot: reagentById[it.reagent_id], previousCompletedAt: priorCounts.byLot[it.reagent_id], session: activeSession });
+  }
+  function windowProblem(iv) {
+    if (iv.reason === "loading") return "Loading the dates of earlier counts…";
+    if (iv.reason === "error") return "Couldn't load the dates of earlier counts, so this usage can't be dated yet. Reopen this count to try again.";
+    if (iv.reason === "no_lot") return "This lot's record wasn't found, so this usage can't be dated.";
+    if (iv.reason === "empty") return `No valid dates: this lot's window starts ${iv.from}, after this count started (${iv.to}).`;
+    return "This lot's dates are unknown, so this usage can't be dated.";
+  }
+  const windowSource = (iv) => (iv.fromSource === "previous_count" ? "since this lot's previous stock count" : "since this lot was received");
+  const outsideMsg = (iv) => `Choose a date from ${iv.from} to ${iv.to} (${windowSource(iv)}, up to the day this count started).`;
+  const setMsg = (id, text) => setLineMsg((m) => ({ ...m, [id]: text }));
 
   async function loadSessions() {
     setLoadingSessions(true);
@@ -166,6 +204,36 @@ export default function StockCount({ reagents, departments, username, reload, wa
   function saveDraft(it) {
     setEdits((prev) => ({ ...prev, [it.id]: { mode: edMode, date: edDate, from: edFrom, to: edTo } }));
     setEditingId(null);
+  }
+
+  // A date edit must stay inside the line's window (countBounds.js), for both
+  // an exact date and every weekly entry a range would create.
+  function draftProblem(it, d) {
+    const iv = countWindow(it);
+    if (!iv.ok) return windowProblem(iv);
+    if (d.mode === "range") {
+      if (!dateInInterval(d.from, iv) || !dateInInterval(d.to, iv) || d.from > d.to) return outsideMsg(iv);
+      const total = Math.round((linkedLogs[it.id]?.logs || []).reduce((s, l) => s + Number(l.amount), 0) * 100) / 100;
+      return entriesInInterval(buildSpreadEntries(total, d.from, d.to), iv) ? null : outsideMsg(iv);
+    }
+    return dateInInterval(d.date, iv) ? null : outsideMsg(iv);
+  }
+
+  function saveDraftChecked(it) {
+    const problem = draftProblem(it, { mode: edMode, date: edDate, from: edFrom, to: edTo });
+    setMsg(it.id, problem);
+    if (!problem) saveDraft(it);
+  }
+
+  // Re-checked at Apply time too (a draft can't be applied unless every one is valid).
+  async function applyAllEditsChecked() {
+    const bad = Object.entries(edits).filter(([id, d]) => { const it = items.find((i) => i.id === id); return it && draftProblem(it, d); });
+    if (bad.length) {
+      bad.forEach(([id, d]) => setMsg(id, draftProblem(items.find((i) => i.id === id), d)));
+      setEditMsg("Nothing was applied: a date edit is outside its lot's valid dates (see the line above).");
+      return;
+    }
+    await applyAllEdits();
   }
 
   function discardDraft(itemId) {
@@ -582,6 +650,9 @@ export default function StockCount({ reagents, departments, username, reload, wa
           const isEditing = editingId === it.id;
           const lineKey = `line:${it.id}`;
           const lineBusy = busy(lineKey);
+          const win = isLogging || isEditing ? countWindow(it) : null;
+          const winMin = win?.ok ? win.from : undefined;
+          const winMax = win?.ok ? win.to : undefined;
           return (
             <div key={it.id} style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderLeft: `4px solid ${AMBER}`, borderRadius: 8, padding: "12px 16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -607,7 +678,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                   </div>
                 ) : shortage ? (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => { setLoggingItemId(it.id); setLogMode("exact"); setLogDate(todayISO()); setLogRangeFrom(todayISO()); setLogRangeTo(todayISO()); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
+                    <button onClick={() => { setLoggingItemId(it.id); setLogMode("unknown"); setLogDate(localDay(activeSession.started_at)); setMsg(it.id, null); }} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Log as unrecorded usage</button>
                     <button onClick={() => guarded(lineKey, () => applyCorrection(it))} disabled={lineBusy} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.text, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, opacity: lineBusy ? 0.6 : 1 }}>Correct a logging error</button>
                     <button onClick={() => guarded(lineKey, () => dismissDiscrepancy(it))} disabled={lineBusy} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, opacity: lineBusy ? 0.6 : 1 }}>Keep system value</button>
                   </div>
@@ -638,16 +709,19 @@ export default function StockCount({ reagents, departments, username, reload, wa
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {edMode === "exact" ? (
-                      <input type="date" value={edDate} max={todayISO()} onChange={(e) => setEdDate(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
+                      <input type="date" value={edDate} min={winMin} max={winMax} onChange={(e) => setEdDate(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
                     ) : (
                       <>
-                        <input type="date" value={edFrom} max={edTo} onChange={(e) => setEdFrom(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
+                        <input type="date" value={edFrom} min={winMin} max={edTo} onChange={(e) => setEdFrom(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
                         <span style={{ fontSize: 12.5, color: T.textMuted }}>to</span>
-                        <input type="date" value={edTo} min={edFrom} max={todayISO()} onChange={(e) => setEdTo(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
+                        <input type="date" value={edTo} min={edFrom} max={winMax} onChange={(e) => setEdTo(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }} />
                       </>
                     )}
-                    <button onClick={() => saveDraft(it)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Save as draft</button>
+                    <button onClick={() => saveDraftChecked(it)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700 }}>Save as draft</button>
                     <button onClick={() => setEditingId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                  </div>
+                  <div style={{ fontSize: 12, color: T.textMuted, marginTop: 8 }}>
+                    {win?.ok ? `Valid dates: ${win.from} to ${win.to} (${windowSource(win)}, up to the day this count started).` : windowProblem(win || { reason: "loading" })}
                   </div>
                 </div>
               )}
@@ -656,56 +730,74 @@ export default function StockCount({ reagents, departments, username, reload, wa
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.cardBorder}` }}>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     <button
+                      onClick={() => setLogMode("unknown")}
+                      style={{ background: logMode === "unknown" ? T.primary : "none", color: logMode === "unknown" ? "#fff" : T.textMuted, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700 }}
+                    >
+                      Unknown date
+                    </button>
+                    <button
                       onClick={() => setLogMode("exact")}
                       style={{ background: logMode === "exact" ? T.primary : "none", color: logMode === "exact" ? "#fff" : T.textMuted, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700 }}
                     >
                       Exact date
                     </button>
-                    <button
-                      onClick={() => setLogMode("range")}
-                      style={{ background: logMode === "range" ? T.primary : "none", color: logMode === "range" ? "#fff" : T.textMuted, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700 }}
-                    >
-                      Spread over a range
-                    </button>
                   </div>
 
-                  {logMode === "exact" ? (
+                  {logMode === "unknown" ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12.5, color: T.textMuted }}>Best guess for when it was used:</span>
-                      <input
-                        type="date"
-                        value={logDate}
-                        max={todayISO()}
-                        onChange={(e) => setLogDate(e.target.value)}
-                        style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
-                      />
-                      <button onClick={() => guarded(lineKey, () => logUnrecordedUsage(it, logDate))} disabled={lineBusy} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}>Confirm</button>
+                      <span style={{ fontSize: 12.5, color: T.textMuted, flex: "1 1 240px" }}>
+                        {win?.ok ? (
+                          <>The exact dates aren't known, so the missing {Math.round((Number(it.expected_quantity) - Number(it.counted_quantity)) * 100) / 100} {it.unit} will be estimated as weekly entries across <b style={{ color: T.text }}>{win.from} – {win.to}</b> ({windowSource(win)}, up to the day this count started).</>
+                        ) : windowProblem(win || { reason: "loading" })}
+                      </span>
+                      <button
+                        onClick={() => guarded(lineKey, async () => {
+                          const iv = countWindow(it);
+                          if (!iv.ok) { setMsg(it.id, windowProblem(iv)); return; }
+                          const entries = buildSpreadEntries(Number(it.expected_quantity) - Number(it.counted_quantity), iv.from, iv.to);
+                          if (!entriesInInterval(entries, iv)) { setMsg(it.id, outsideMsg(iv)); return; }
+                          setMsg(it.id, null);
+                          await logUnrecordedUsageSpread(it, iv.from, iv.to);
+                        })}
+                        disabled={lineBusy || !win?.ok}
+                        style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy || !win?.ok ? 0.6 : 1 }}
+                      >
+                        Confirm
+                      </button>
                       <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
                     </div>
                   ) : (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12.5, color: T.textMuted }}>Spread across:</span>
+                      <span style={{ fontSize: 12.5, color: T.textMuted }}>Only if you know when it was used:</span>
                       <input
                         type="date"
-                        value={logRangeFrom}
-                        max={logRangeTo}
-                        onChange={(e) => setLogRangeFrom(e.target.value)}
+                        value={logDate}
+                        min={winMin}
+                        max={winMax}
+                        onChange={(e) => setLogDate(e.target.value)}
                         style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
                       />
-                      <span style={{ fontSize: 12.5, color: T.textMuted }}>to</span>
-                      <input
-                        type="date"
-                        value={logRangeTo}
-                        min={logRangeFrom}
-                        max={todayISO()}
-                        onChange={(e) => setLogRangeTo(e.target.value)}
-                        style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "6px 8px", fontSize: 13, background: T.cardBg, color: T.text }}
-                      />
-                      <button onClick={() => guarded(lineKey, () => logUnrecordedUsageSpread(it, logRangeFrom, logRangeTo))} disabled={lineBusy} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}>Confirm</button>
+                      <button
+                        onClick={() => guarded(lineKey, async () => {
+                          const iv = countWindow(it);
+                          if (!dateInInterval(logDate, iv)) { setMsg(it.id, iv.ok ? outsideMsg(iv) : windowProblem(iv)); return; }
+                          setMsg(it.id, null);
+                          await logUnrecordedUsage(it, logDate);
+                        })}
+                        disabled={lineBusy}
+                        style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}
+                      >
+                        Confirm
+                      </button>
                       <button onClick={() => setLoggingItemId(null)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+                      {win?.ok && <span style={{ fontSize: 12, color: T.textMuted, flexBasis: "100%" }}>Valid dates: {win.from} to {win.to} ({windowSource(win)}, up to the day this count started).</span>}
                     </div>
                   )}
                 </div>
+              )}
+
+              {lineMsg[it.id] && (
+                <div style={{ fontSize: 12, color: RED, marginTop: 8 }}>{lineMsg[it.id]}</div>
               )}
             </div>
           );
@@ -736,7 +828,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
             <div style={{ fontSize: 12, fontWeight: 400, color: T.textMuted }}>Nothing changes in your data until you press Apply.</div>
           </div>
           <button onClick={() => setEdits({})} disabled={applyingEdits} style={{ background: "none", border: `1px solid ${T.cardBorder}`, color: T.textMuted, borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 }}>Discard all</button>
-          <button onClick={() => guarded("apply-edits", applyAllEdits)} disabled={applyingEdits || busy("apply-edits")} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, opacity: applyingEdits ? 0.7 : 1 }}>{applyingEdits ? "Applying…" : "Apply all"}</button>
+          <button onClick={() => guarded("apply-edits", applyAllEditsChecked)} disabled={applyingEdits || busy("apply-edits")} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, opacity: applyingEdits ? 0.7 : 1 }}>{applyingEdits ? "Applying…" : "Apply all"}</button>
         </div>
       )}
 
