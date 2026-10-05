@@ -5,6 +5,7 @@ import BarcodeScanner from "./BarcodeScanner";
 import { buildSpreadEntries } from "./logSpread";
 import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
 import { startDecision, isScopeConflict } from "./countScope";
+import { exactProvenance, resolutionDetails, resolutionUpdate, countedFields } from "./countEvidence";
 
 const T = {
   primary: "var(--primary)",
@@ -262,6 +263,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
         : "Retroactively logged — found missing during a physical count.";
       const { data: inserted, error } = await supabase.from("consumption_logs").insert(entries.map((en) => ({
         reagent_id: it.reagent_id, amount: en.amount, date: en.date, used_by: "Unlogged (physical count)", note,
+        source_count_item_id: itemId, date_provenance: "count_redated",
       }))).select("id");
       if (error || !inserted) { failed++; continue; }
       await supabase.from("consumption_logs").delete().in("id", info.logs.map((l) => l.id));
@@ -365,8 +367,9 @@ export default function StockCount({ reagents, departments, username, reload, wa
 
   async function saveCount(itemId, value) {
     const num = value === "" ? null : Number(value);
-    setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, counted_quantity: num } : it)));
-    await supabase.from("inventory_count_items").update({ counted_quantity: num }).eq("id", itemId);
+    const observed = countedFields(items.find((it) => it.id === itemId)?.counted_quantity, num, username);
+    setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, counted_quantity: num, ...observed } : it)));
+    await supabase.from("inventory_count_items").update({ counted_quantity: num, ...observed }).eq("id", itemId);
   }
 
   function handleScan(text) {
@@ -426,8 +429,9 @@ export default function StockCount({ reagents, departments, username, reload, wa
       });
       await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
-    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: "Corrected to match count" }).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: "Corrected to match count" } : it)));
+    const resolution = resolutionUpdate("Corrected to match count", username, resolutionDetails({ method: "corrected", item }));
+    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
     reload();
   }
 
@@ -437,8 +441,9 @@ export default function StockCount({ reagents, departments, username, reload, wa
   // reorder suggestions, and "most used" reports honest. The date is left
   // to the person resolving it — we have no way to know when the units
   // actually went missing, only that they're gone now.
-  async function logUnrecordedUsage(item, date) {
+  async function logUnrecordedUsage(item, date, iv) {
     const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
+    const provenance = exactProvenance(date, localDay(activeSession.started_at));
     if (item.reagent_id) {
       const { data: created } = await supabase.from("consumption_logs").insert({
         reagent_id: item.reagent_id,
@@ -446,6 +451,8 @@ export default function StockCount({ reagents, departments, username, reload, wa
         date,
         used_by: "Unlogged (physical count)",
         note: "Retroactively logged — found missing during a physical count.",
+        source_count_item_id: item.id,
+        date_provenance: provenance,
       }).select("id");
       await linkLogs(item.id, created);
       await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
@@ -458,8 +465,10 @@ export default function StockCount({ reagents, departments, username, reload, wa
       await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
     const note = `Logged as usage on ${date}`;
-    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: note } : it)));
+    const details = resolutionDetails({ method: "usage_exact", item, window: iv, allocation: item.reagent_id ? [{ date, amount: shortage }] : [], provenance });
+    const resolution = resolutionUpdate(note, username, details);
+    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
     setLoggingItemId(null);
     reload();
   }
@@ -468,16 +477,18 @@ export default function StockCount({ reagents, departments, username, reload, wa
   // shortage built up gradually over a known period rather than on one
   // specific day — spreads it into ~weekly entries so it doesn't show up as
   // one artificial spike in the usage-rate charts.
-  async function logUnrecordedUsageSpread(item, fromDate, toDate) {
+  async function logUnrecordedUsageSpread(item, fromDate, toDate, iv) {
     const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
+    const entries = item.reagent_id ? buildSpreadEntries(shortage, fromDate, toDate) : [];
     if (item.reagent_id) {
-      const entries = buildSpreadEntries(shortage, fromDate, toDate);
       const { data: created } = await supabase.from("consumption_logs").insert(entries.map((e) => ({
         reagent_id: item.reagent_id,
         amount: e.amount,
         date: e.date,
         used_by: "Unlogged (physical count)",
         note: `Retroactively logged — spread from ${fromDate} to ${toDate}, found missing during a physical count.`,
+        source_count_item_id: item.id,
+        date_provenance: "count_spread_window",
       }))).select("id");
       await linkLogs(item.id, created);
       await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
@@ -490,15 +501,18 @@ export default function StockCount({ reagents, departments, username, reload, wa
       await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
     }
     const note = `Logged as usage spread from ${fromDate} to ${toDate}`;
-    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: note }).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: note } : it)));
+    const details = resolutionDetails({ method: "usage_spread", item, window: iv, allocation: entries, provenance: "count_spread_window" });
+    const resolution = resolutionUpdate(note, username, details);
+    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
     setLoggingItemId(null);
     reload();
   }
 
   async function dismissDiscrepancy(item) {
-    await supabase.from("inventory_count_items").update({ resolved: true, resolution_note: "Kept system value" }).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, resolved: true, resolution_note: "Kept system value" } : it)));
+    const resolution = resolutionUpdate("Kept system value", username, resolutionDetails({ method: "kept", item }));
+    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
   }
 
   async function finishSession() {
@@ -822,7 +836,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                           const entries = buildSpreadEntries(Number(it.expected_quantity) - Number(it.counted_quantity), iv.from, iv.to);
                           if (!entriesInInterval(entries, iv)) { setMsg(it.id, outsideMsg(iv)); return; }
                           setMsg(it.id, null);
-                          await logUnrecordedUsageSpread(it, iv.from, iv.to);
+                          await logUnrecordedUsageSpread(it, iv.from, iv.to, iv);
                         })}
                         disabled={lineBusy || !win?.ok}
                         style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy || !win?.ok ? 0.6 : 1 }}
@@ -847,7 +861,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                           const iv = countWindow(it);
                           if (!dateInInterval(logDate, iv)) { setMsg(it.id, iv.ok ? outsideMsg(iv) : windowProblem(iv)); return; }
                           setMsg(it.id, null);
-                          await logUnrecordedUsage(it, logDate);
+                          await logUnrecordedUsage(it, logDate, iv);
                         })}
                         disabled={lineBusy}
                         style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}
