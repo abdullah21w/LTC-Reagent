@@ -4,6 +4,7 @@ import { supabase } from "./supabaseClient";
 import BarcodeScanner from "./BarcodeScanner";
 import { buildSpreadEntries } from "./logSpread";
 import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
+import { startDecision, isScopeConflict } from "./countScope";
 
 const T = {
   primary: "var(--primary)",
@@ -41,6 +42,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [startDept, setStartDept] = useState("all");
+  const [notice, setNotice] = useState(""); // why a start continued an open count or was refused
   const [activeSession, setActiveSession] = useState(null);
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
@@ -293,7 +295,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
       .insert({ department: startDept === "all" ? null : startDept, started_by: username })
       .select()
       .single();
-    if (error || !session) return;
+    if (error || !session) return { error };
     const rows = scope.map((r) => ({
       count_id: session.id,
       reagent_id: r.id,
@@ -307,6 +309,46 @@ export default function StockCount({ reagents, departments, username, reload, wa
     setActiveSession(session);
     setItems(inserted || []);
     setView("active");
+    loadSessions();
+  }
+
+  // Start a count, or continue the open one for the same scope (countScope.js).
+  // 1. fresh read of the open counts, 2. start only if allowed, 3. if the
+  // database still refuses (another tab/device won a race), re-read and
+  // continue/explain. Only this rule's own refusals are handled here.
+  const scopeName = (dept) => (dept == null ? "Whole lab" : dept);
+  async function applyStartDecision(d, dept) {
+    if (d.kind === "resume") {
+      setNotice(dept == null ? "A Whole lab count is already in progress. Continuing the existing count." : `${dept} already has a stock count in progress. Continuing the existing count.`);
+      await resumeCount(d.session);
+      return true;
+    }
+    if (d.kind === "blocked_by_whole_lab") {
+      setNotice("A Whole lab count is in progress. No other count can start until it's finished.");
+      loadSessions();
+      return true;
+    }
+    if (d.kind === "blocked_by_departments") {
+      setNotice(`Whole lab can't start while other counts are in progress (${[...new Set(d.sessions.map((s) => scopeName(s.department)))].join(", ")}). Finish them first.`);
+      loadSessions();
+      return true;
+    }
+    return false;
+  }
+  async function readOpenCounts() {
+    const { data, error } = await supabase.from("inventory_counts").select("*").eq("status", "in_progress");
+    return error ? null : data || [];
+  }
+  async function startOrContinue() {
+    const dept = startDept === "all" ? null : startDept;
+    setNotice("");
+    const open = await readOpenCounts();
+    if (open && (await applyStartDecision(startDecision(dept, open), dept))) return;
+    const result = await startCount();
+    if (!result || !isScopeConflict(result.error)) return;
+    const now = await readOpenCounts();
+    if (now && (await applyStartDecision(startDecision(dept, now), dept))) return;
+    setNotice("Another stock count was just started or changed. Please try again.");
     loadSessions();
   }
 
@@ -491,6 +533,18 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const unresolvedDiscrepancies = discrepancies.filter((it) => !it.resolved);
   const notCounted = items.filter((it) => it.counted_quantity === null);
 
+  // Start-button state from the sessions already loaded (convenience only — the
+  // fresh check in startOrContinue and the database are what enforce the rule).
+  const loadedDecision = startDecision(startDept === "all" ? null : startDept, sessions);
+  const startBlocked = loadedDecision.kind === "blocked_by_whole_lab" || loadedDecision.kind === "blocked_by_departments";
+  const startHint = loadedDecision.kind === "resume"
+    ? `${scopeName(loadedDecision.session.department)} already has a count in progress — Continue count opens it.`
+    : loadedDecision.kind === "blocked_by_whole_lab"
+      ? "A Whole lab count is in progress. Finish it before starting another count."
+      : loadedDecision.kind === "blocked_by_departments"
+        ? `Whole lab can't start while other counts are in progress (${[...new Set(loadedDecision.sessions.map((s) => scopeName(s.department)))].join(", ")}).`
+        : "";
+
   if (view === "list") {
     return (
       <div>
@@ -498,17 +552,22 @@ export default function StockCount({ reagents, departments, username, reload, wa
           <h2 style={{ fontSize: 20, fontWeight: 700, color: T.text }}>Stock count</h2>
         </div>
         <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>
-          Walk the shelves and count what's actually there, then compare against what the system expects. Start as many sessions as you like — no schedule, no limit.
+          Walk the shelves and count what's actually there, then compare against what the system expects. Count whenever you like — no schedule. Each department can have one count open at a time; a Whole lab count (every department) needs all other counts finished first.
         </div>
+
+        {notice && (
+          <div style={{ fontSize: 13, color: T.text, background: "#FBF3DF", border: `1px solid ${AMBER}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16 }}>{notice}</div>
+        )}
 
         <div style={{ background: T.cardBg, border: `1px solid ${T.cardBorder}`, borderRadius: 12, boxShadow: T.cardShadow, padding: 16, marginBottom: 24, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <select value={startDept} onChange={(e) => setStartDept(e.target.value)} style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 14, background: T.cardBg, color: T.text, flex: 1, minWidth: 160 }}>
             <option value="all">Whole lab</option>
             {departments.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          <button onClick={() => guarded("start", startCount)} disabled={busy("start")} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, opacity: busy("start") ? 0.6 : 1 }}>
-            <Plus size={15} /> Start new count
+          <button onClick={() => guarded("start", startOrContinue)} disabled={busy("start") || startBlocked} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, opacity: busy("start") || startBlocked ? 0.6 : 1 }}>
+            {loadedDecision.kind === "resume" ? <><ChevronRight size={15} /> Continue count</> : <><Plus size={15} /> Start new count</>}
           </button>
+          {startHint && <div style={{ flexBasis: "100%", fontSize: 12.5, color: T.textMuted }}>{startHint}</div>}
         </div>
 
         <div style={{ fontWeight: 700, fontSize: 13, color: T.textMuted, letterSpacing: 0.3, marginBottom: 8 }}>PAST SESSIONS</div>
@@ -550,7 +609,10 @@ export default function StockCount({ reagents, departments, username, reload, wa
   if (view === "active") {
     return (
       <div>
-        <button onClick={backToList} style={{ background: "none", border: "none", color: T.primary, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>← Back to stock count</button>
+        <button onClick={() => { setNotice(""); backToList(); }} style={{ background: "none", border: "none", color: T.primary, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>← Back to stock count</button>
+        {notice && (
+          <div style={{ fontSize: 13, color: T.text, background: "#FBF3DF", border: `1px solid ${AMBER}`, borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>{notice}</div>
+        )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: T.text }}>{activeSession.department || "Whole lab"} — counting</h2>
           <div style={{ fontSize: 13, fontWeight: 700, color: T.textMuted }}>{countedN} / {items.length} counted</div>
@@ -626,7 +688,10 @@ export default function StockCount({ reagents, departments, username, reload, wa
   // view === "review"
   return (
     <div>
-      <button onClick={backToList} style={{ background: "none", border: "none", color: T.primary, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>← Back to stock count</button>
+      <button onClick={() => { setNotice(""); backToList(); }} style={{ background: "none", border: "none", color: T.primary, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>← Back to stock count</button>
+      {notice && (
+        <div style={{ fontSize: 13, color: T.text, background: "#FBF3DF", border: `1px solid ${AMBER}`, borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>{notice}</div>
+      )}
       <h2 style={{ fontSize: 20, fontWeight: 700, color: T.text, marginBottom: 4 }}>{activeSession.department || "Whole lab"} — review</h2>
       <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>
         {activeSession.status === "completed" ? `Completed by ${activeSession.completed_by} · ${fmtDateTime(activeSession.completed_at)}` : "Only mismatches are shown below — everything else matched what the system expected."}
