@@ -8,9 +8,9 @@
 --
 -- consumption_logs — a row is count-derived when it is linked to a count line
 -- (source_count_item_id) or written as a Stock Count correction (used_by).
---   * count-derived rows: amount, reagent_id, used_by and deleted can't change
---     (date edits work by inserting replacement rows and deleting the old ones,
---     which stays allowed).
+--   * count-derived rows: amount, reagent_id, used_by, deleted and date can't
+--     change. Edit dates (stock_count_redate) inserts replacement rows and
+--     deletes the old ones in one transaction, which stays allowed.
 --   * every row: source_count_item_id and date_provenance are write-once —
 --     NULL → value is allowed; value → other value or NULL is refused. The one
 --     exception is the foreign key's own ON DELETE SET NULL, which runs only
@@ -18,7 +18,16 @@
 -- inventory_count_items
 --   * resolution_details, resolved_at, resolved_by are write-once (NULL → value
 --     allowed; any later change, including back to NULL, refused).
---   * counted_at / counted_by and every existing column stay freely updatable.
+--   * a resolved line stays resolved (true → false refused; nothing reopens one).
+--   * a resolved line's physical count is final: counted_quantity can't change;
+--     counted_at / counted_by can't change or be cleared (NULL → value stays
+--     allowed, for recording history that was never captured).
+--   * unresolved lines, and every other column, stay freely updatable.
+--
+-- UPDATE only. Hard DELETE is not guarded here: Edit dates removes replaced
+-- correction rows, and deleting an in-progress count cascades to its lines.
+-- The app refuses generic purge of count-derived rows; a direct DELETE through
+-- the API is not prevented by this file.
 --
 -- Refusals raise SQLSTATE P0001 with message 'evidence_field_protected' and
 -- the column name in DETAIL. Comparisons are NULL-safe (IS DISTINCT FROM).
@@ -37,6 +46,7 @@ begin
     elsif new.reagent_id is distinct from old.reagent_id then bad := 'reagent_id';
     elsif new.used_by is distinct from old.used_by then bad := 'used_by';
     elsif new.deleted is distinct from old.deleted then bad := 'deleted';
+    elsif new.date is distinct from old.date then bad := 'date';
     end if;
   end if;
 
@@ -78,6 +88,10 @@ begin
   if old.resolution_details is not null and new.resolution_details is distinct from old.resolution_details then bad := 'resolution_details';
   elsif old.resolved_at is not null and new.resolved_at is distinct from old.resolved_at then bad := 'resolved_at';
   elsif old.resolved_by is not null and new.resolved_by is distinct from old.resolved_by then bad := 'resolved_by';
+  elsif old.resolved and new.resolved is distinct from old.resolved then bad := 'resolved';
+  elsif old.resolved and new.counted_quantity is distinct from old.counted_quantity then bad := 'counted_quantity';
+  elsif old.resolved and old.counted_at is not null and new.counted_at is distinct from old.counted_at then bad := 'counted_at';
+  elsif old.resolved and old.counted_by is not null and new.counted_by is distinct from old.counted_by then bad := 'counted_by';
   end if;
   if bad is not null then
     raise exception using errcode = 'P0001', message = 'evidence_field_protected', detail = bad, hint = old.id::text;

@@ -10,6 +10,7 @@ import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
+import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
 import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
@@ -326,6 +327,8 @@ export default function App() {
 
   async function recordConsumption(entry) {
     if (!can("log_use")) return;
+    // Checked before anything is written: the Stock Count user name is reserved.
+    if (isReservedUsedBy(entry.usedBy)) { alert(`"${entry.usedBy}" is reserved for stock-count corrections, so this use wasn't logged.`); return; }
     const item = reagents.find((r) => r.id === entry.reagentId);
     if (!item) return;
     const newQty = Math.max(0, item.current_quantity - entry.amount);
@@ -356,6 +359,7 @@ export default function App() {
     await supabase.from("consumption_logs").insert({
       reagent_id: entry.reagentId, amount: entry.amount, date: entry.date, used_by: entry.usedBy, note: entry.note, tested_by_qc: entry.testedByQC,
       active_device_changed: activeDeviceChanged, previous_active_lot_id: previousActiveLotId,
+      date_provenance: "manual", // the person logging chose this date (needs ADD_EVIDENCE_FOUNDATION.sql)
     });
     if (item.device) {
       if (entry.replaceOnDevice) {
@@ -497,8 +501,13 @@ export default function App() {
     return { ok: true, message: `Maintenance complete. ${depletedRemoved} depleted lot(s) removed.` };
   }
 
+  // Returns an error message (nothing written) or nothing (saved). Both checks
+  // run before the first write: stock-count corrections change only through
+  // Stock count, and the Stock Count user name is reserved.
   async function saveEditedLog(updated, original) {
     if (!can("edit")) return;
+    if (isCountDerivedLog(original)) return COUNT_LOG_LOCKED_MSG;
+    if (isReservedUsedBy(updated.used_by)) return `"${updated.used_by}" is reserved for stock-count corrections. Enter who used it.`;
     const item = reagents.find((r) => r.id === original.reagent_id);
     if (item) {
       const delta = updated.amount - original.amount;
@@ -520,6 +529,7 @@ export default function App() {
       await supabase.from("consumption_logs").delete().eq("id", updated.id);
       await supabase.from("consumption_logs").insert(entries.map((e) => ({
         reagent_id: original.reagent_id, amount: e.amount, date: e.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
+        date_provenance: "manual_spread", // manual quantity, dates estimated across the range
       })));
       await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by}, spread from ${updated.rangeFrom} to ${updated.rangeTo}`);
     } else {
@@ -535,6 +545,8 @@ export default function App() {
 
   async function deleteLog(log) {
     if (!can("delete")) return;
+    // Before anything is written (this flow restores stock first).
+    if (isCountDerivedLog(log)) { alert(COUNT_LOG_LOCKED_MSG); return; }
     if (!confirm("Remove this log entry? The amount will be added back to stock, but it stays in Reports for audit purposes.")) return;
     const item = reagents.find((r) => r.id === log.reagent_id);
     if (item) {
@@ -586,8 +598,9 @@ export default function App() {
 
   async function purgeLog(id) {
     if (role !== "owner") return;
-    if (!confirm("Permanently erase this record? This cannot be undone and it will disappear from Reports too.")) return;
     const log = logs.find((l) => l.id === id);
+    if (!log || isCountDerivedLog(log)) { alert(log ? COUNT_LOG_LOCKED_MSG : "This entry wasn't found, so nothing was erased."); return; }
+    if (!confirm("Permanently erase this record? This cannot be undone and it will disappear from Reports too.")) return;
     const item = log ? reagents.find((r) => r.id === log.reagent_id) : null;
     await supabase.from("consumption_logs").delete().eq("id", id);
     await logActivity("purge", "log", log ? `${item ? item.name : "Unknown"} — ${log.amount} used by ${log.used_by} on ${log.date}` : id);
@@ -2803,11 +2816,11 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
             </div>
             <div style={{ flex: 1, minWidth: 70, color: THEME.text, fontWeight: 600 }}>−{l.amount} {group.unit}</div>
             <div style={{ color: THEME.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
-              {isCorrection ? <span title={l.used_by}><MutedTag>Stock-count correction</MutedTag></span> : <><Users size={12} /> {l.used_by}</>}
+              {isCorrection ? <span title={`${l.used_by} — change it from Stock count (Edit dates)`}><MutedTag>Stock-count correction</MutedTag></span> : <><Users size={12} /> {l.used_by}</>}
             </div>
             <div style={{ fontSize: 11, color: l.tested_by_qc ? "var(--success)" : THEME.textMuted, fontWeight: 600 }}>{l.tested_by_qc ? "QC ✓" : "QC —"}</div>
-            {lotActive && can("edit") && <button onClick={() => onEditLog(l)} title="Edit this entry" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={13} /></button>}
-            {lotActive && can("delete") && <button onClick={() => onDeleteLog(l)} title="Delete this entry" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={13} /></button>}
+            {lotActive && can("edit") && !isCountDerivedLog(l) && <button onClick={() => onEditLog(l)} title="Edit this entry" style={{ ...iconBtn, color: THEME.textMuted }}><Pencil size={13} /></button>}
+            {lotActive && can("delete") && !isCountDerivedLog(l) && <button onClick={() => onDeleteLog(l)} title="Delete this entry" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={13} /></button>}
           </div>
         ))}
       </div>
@@ -3148,10 +3161,11 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onRe
                         <div style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
                           {r ? r.name : "Unknown reagent"}
                           {l.deleted && <span style={{ fontSize: 10, fontWeight: 700, color: "#C1432B", background: "#FBEAE6", padding: "2px 7px", borderRadius: 4 }}>DELETED by {l.deleted_by} · {fmtDateTime(l.deleted_at)}</span>}
-                          {l.deleted && role === "owner" && (
+                          {isCountDerivedLog(l) && <span title="Change it from Stock count (Edit dates)" style={{ fontSize: 10, fontWeight: 700, color: "#516361", background: "#EEF2F1", padding: "2px 7px", borderRadius: 4 }}>STOCK-COUNT CORRECTION</span>}
+                          {l.deleted && role === "owner" && !isCountDerivedLog(l) && (
                             <button onClick={() => onPurgeLog(l.id)} style={{ background: "none", border: "1px solid #C1432B", color: "#C1432B", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>Erase permanently</button>
                           )}
-                          {!l.deleted && can("delete") && (
+                          {!l.deleted && can("delete") && !isCountDerivedLog(l) && (
                             <button onClick={() => onDeleteLog(l)} title="Undo this log entry" style={{ background: "none", border: "none", color: "#C1432B", padding: 2 }}><Trash2 size={14} /></button>
                           )}
                         </div>
@@ -3543,11 +3557,13 @@ function EditLogModal({ log, onClose, onSave }) {
   const [mode, setMode] = useState("exact"); // exact | range
   const [rangeFrom, setRangeFrom] = useState(log.date);
   const [rangeTo, setRangeTo] = useState(log.date);
+  const [refusal, setRefusal] = useState("");
 
-  function submit() {
+  async function submit() {
     if (saving) return;
     setSaving(true);
-    onSave({ ...form, amount: Number(form.amount), spreadMode: mode === "range", rangeFrom, rangeTo }, log);
+    const err = await onSave({ ...form, amount: Number(form.amount), spreadMode: mode === "range", rangeFrom, rangeTo }, log);
+    if (err) { setRefusal(err); setSaving(false); }
   }
   return (
     <Modal title="Edit consumption log" onClose={onClose}>
@@ -3586,6 +3602,7 @@ function EditLogModal({ log, onClose, onSave }) {
         {mode === "range" && (
           <div style={{ fontSize: 11.5, color: "#8A9694" }}>This replaces the single entry with several smaller ones spread weekly across the range, so it totals the same amount without showing up as one spike on one day.</div>
         )}
+        {refusal && <div style={{ fontSize: 12.5, color: "#C1432B" }}>{refusal}</div>}
         <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
