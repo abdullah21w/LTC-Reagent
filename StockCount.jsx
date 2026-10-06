@@ -4,7 +4,7 @@ import { supabase } from "./supabaseClient";
 import BarcodeScanner from "./BarcodeScanner";
 import { buildSpreadEntries } from "./logSpread";
 import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
-import { startDecision, isScopeConflict } from "./countScope";
+import { startDecision } from "./countScope";
 import { countedFields } from "./countEvidence";
 
 const T = {
@@ -283,29 +283,19 @@ export default function StockCount({ reagents, departments, username, reload, wa
     if (applied) reload();
   }
 
-  async function startCount() {
-    const scope = reagents.filter((r) => !r.deleted && (startDept === "all" || r.department === startDept));
-    if (scope.length === 0) return;
-    const { data: session, error } = await supabase
-      .from("inventory_counts")
-      .insert({ department: startDept === "all" ? null : startDept, started_by: username })
-      .select()
-      .single();
-    if (error || !session) return { error };
-    const rows = scope.map((r) => ({
-      count_id: session.id,
-      reagent_id: r.id,
-      reagent_name: r.name,
-      lot_number: r.lot_number,
-      department: r.department,
-      unit: r.unit,
-      expected_quantity: r.current_quantity,
-    }));
-    const { data: inserted } = await supabase.from("inventory_count_items").insert(rows).select();
-    setActiveSession(session);
-    setItems(inserted || []);
-    setView("active");
-    loadSessions();
+  // One atomic call (ADD_STOCK_COUNT_START.sql): the database picks the lots
+  // of the scope and creates the count with each line's expected quantity read
+  // there and then — never the quantities this browser loaded earlier. The
+  // count and lines shown are the rows the database stored.
+  async function startCount(dept) {
+    const r = await countCall("stock_count_start", { p_department: dept, p_actor: username });
+    if (r.status === "ok") {
+      setActiveSession(r.count);
+      setItems(r.items);
+      setView("active");
+      loadSessions();
+    }
+    return r;
   }
 
   // Start a count, or continue the open one for the same scope (countScope.js).
@@ -340,11 +330,17 @@ export default function StockCount({ reagents, departments, username, reload, wa
     setNotice("");
     const open = await readOpenCounts();
     if (open && (await applyStartDecision(startDecision(dept, open), dept))) return;
-    const result = await startCount();
-    if (!result || !isScopeConflict(result.error)) return;
-    const now = await readOpenCounts();
-    if (now && (await applyStartDecision(startDecision(dept, now), dept))) return;
-    setNotice("Another stock count was just started or changed. Please try again.");
+    const result = await startCount(dept);
+    if (result.status === "ok") return;
+    if (result.status === "no_items") { setNotice(`There are no lots in ${scopeName(dept)} to count.`); return; }
+    if (result.status === "scope_conflict") {
+      // Another device opened a count after the check above: re-read and continue/explain.
+      const now = await readOpenCounts();
+      if (now && (await applyStartDecision(startDecision(dept, now), dept))) return;
+      setNotice("Another stock count was just started or changed. Please try again.");
+    } else {
+      setNotice("Couldn't confirm that the count started. Check the connection and try again — if it did start, it will be continued.");
+    }
     loadSessions();
   }
 
