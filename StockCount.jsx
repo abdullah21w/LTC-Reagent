@@ -5,7 +5,7 @@ import BarcodeScanner from "./BarcodeScanner";
 import { buildSpreadEntries } from "./logSpread";
 import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
 import { startDecision, isScopeConflict } from "./countScope";
-import { exactProvenance, resolutionDetails, resolutionUpdate, countedFields } from "./countEvidence";
+import { countedFields } from "./countEvidence";
 
 const T = {
   primary: "var(--primary)",
@@ -122,7 +122,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
   }
   const windowSource = (iv) => (iv.fromSource === "previous_count" ? "since this lot's previous stock count" : "since this lot was received");
   const outsideMsg = (iv) => `Choose a date from ${iv.from} to ${iv.to} (${windowSource(iv)}, up to the day this count started).`;
-  const setMsg = (id, text) => setLineMsg((m) => ({ ...m, [id]: text }));
+  const setMsg = (id, text, calm = false) => setLineMsg((m) => ({ ...m, [id]: text ? { text, calm } : null }));
 
   async function loadSessions() {
     setLoadingSessions(true);
@@ -243,50 +243,44 @@ export default function StockCount({ reagents, departments, username, reload, wa
     setEdits((prev) => { const next = { ...prev }; delete next[itemId]; return next; });
   }
 
-  // Nothing above touches real data: drafts live only in memory. This is the
-  // only place the edited dates are actually written — new entries are
-  // inserted first and the old ones removed only after that succeeds, so a
-  // failure never leaves an item with no usage entries at all.
+  // Nothing above touches real data: drafts live only in memory. Applying
+  // re-dates each drafted line with ONE atomic call (stock_count_redate): the
+  // replacement entries, removal of the old ones, the line's note/links and the
+  // audit row commit together, or that line stays exactly as it was. Lines are
+  // independent; the stock and the original resolution never change.
   async function applyAllEdits() {
     setApplyingEdits(true);
     setEditMsg("");
     let applied = 0;
+    let changed = 0;
     let failed = 0;
     for (const [itemId, e] of Object.entries(edits)) {
-      const it = items.find((i) => i.id === itemId);
       const info = linkedLogs[itemId];
-      if (!it || !info || !info.matched) { failed++; continue; }
+      if (!info || !info.matched) { failed++; setMsg(itemId, "This line's usage entries weren't found, so its dates weren't changed."); continue; }
       const total = Math.round(info.logs.reduce((s, l) => s + Number(l.amount), 0) * 100) / 100;
-      const entries = e.mode === "range" ? buildSpreadEntries(total, e.from, e.to) : [{ date: e.date, amount: total }];
-      const note = e.mode === "range"
-        ? `Retroactively logged — spread from ${e.from} to ${e.to}, found missing during a physical count.`
-        : "Retroactively logged — found missing during a physical count.";
-      const { data: inserted, error } = await supabase.from("consumption_logs").insert(entries.map((en) => ({
-        reagent_id: it.reagent_id, amount: en.amount, date: en.date, used_by: "Unlogged (physical count)", note,
-        source_count_item_id: itemId, date_provenance: "count_redated",
-      }))).select("id");
-      if (error || !inserted) { failed++; continue; }
-      await supabase.from("consumption_logs").delete().in("id", info.logs.map((l) => l.id));
-      const oldDates = info.logs.map((l) => l.date).sort();
-      const oldText = oldDates.length > 1 ? `${oldDates[0]} → ${oldDates[oldDates.length - 1]}` : oldDates[0];
-      const resNote = e.mode === "range" ? `Logged as usage spread from ${e.from} to ${e.to}` : `Logged as usage on ${e.date}`;
-      await supabase.from("inventory_count_items").update({ resolution_note: resNote }).eq("id", itemId);
-      // Separate call so the edit still works before ADD_COUNT_LOG_LINKS.sql has been run.
-      await supabase.from("inventory_count_items").update({ consumption_log_ids: inserted.map((r) => r.id) }).eq("id", itemId);
-      await supabase.from("audit_log").insert({
-        action: "edit",
-        entity: "log",
-        description: `Stock count edit: ${it.reagent_name} — Lot ${it.lot_number} — ${total} ${it.unit} of unlogged usage re-dated from ${oldText} to ${describeEdit(e)}`,
-        performed_by: username,
+      const r = await countCall("stock_count_redate", {
+        p_item_id: itemId,
+        p_actor: username,
+        p_current_log_ids: info.logs.map((l) => l.id),
+        p_mode: e.mode === "range" ? "range" : "exact",
+        ...(e.mode === "range"
+          ? { p_from: e.from, p_to: e.to, p_allocation: buildSpreadEntries(total, e.from, e.to).map((en) => ({ date: en.date, amount: en.amount })) }
+          : { p_date: e.date }),
       });
-      applied++;
+      if (r.status === "ok") applied++;
+      else if (r.status === "stale_allocation") changed++;
+      else failed++;
+      setMsg(itemId, resultMessage(r));
     }
     const data = await loadItems(activeSession.id);
     await loadLinkedLogs(activeSession, data);
     setEdits({});
     setApplyingEdits(false);
-    setEditMsg(failed ? `${applied} updated, ${failed} could not be updated (their usage entries weren't found).` : `${applied} edit${applied === 1 ? "" : "s"} applied.`);
-    reload();
+    const parts = [`${applied} edit${applied === 1 ? "" : "s"} applied`];
+    if (changed) parts.push(`${changed} changed since loaded — review again`);
+    if (failed) parts.push(`${failed} could not be updated (see the line${failed === 1 ? "" : "s"} above)`);
+    setEditMsg(`${parts.join(", ")}.`);
+    if (applied) reload();
   }
 
   async function startCount() {
@@ -365,9 +359,13 @@ export default function StockCount({ reagents, departments, username, reload, wa
     setView(session.status === "completed" ? "review" : "active");
   }
 
+  // Counting only — resolving is separate. Once a line is resolved its counted
+  // quantity is final: the input is disabled and this refuses the write too.
   async function saveCount(itemId, value) {
+    const current = items.find((it) => it.id === itemId);
+    if (current?.resolved) return;
     const num = value === "" ? null : Number(value);
-    const observed = countedFields(items.find((it) => it.id === itemId)?.counted_quantity, num, username);
+    const observed = countedFields(current?.counted_quantity, num, username);
     setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, counted_quantity: num, ...observed } : it)));
     await supabase.from("inventory_count_items").update({ counted_quantity: num, ...observed }).eq("id", itemId);
   }
@@ -385,55 +383,68 @@ export default function StockCount({ reagents, departments, username, reload, wa
     setTimeout(() => setHighlightId(null), 2500);
   }
 
-  // Mirrors the same auto-remove rule App.jsx's recordConsumption applies on
-  // every normal "Log use" entry: once a lot hits 0, hide it from the active
-  // list if another lot of the same reagent+device still has stock (it stays
-  // visible, marked Critical, only when it's the last one left). That rule
-  // lives in App.jsx and never ran for quantity changes made from here, so a
-  // lot zeroed out via a physical count silently stayed "active" forever.
-  async function autoRemoveIfDepleted(reagentId, newQty) {
-    if (newQty > 0) return;
-    const reagent = reagents.find((r) => r.id === reagentId);
-    if (!reagent) return;
-    const hasAlternative = reagents.some((r) => r.id !== reagent.id && r.name === reagent.name && (r.device || "") === (reagent.device || "") && !r.deleted && r.current_quantity > 0);
-    if (!hasAlternative) return;
-    await supabase.from("reagents").update({
-      deleted: true,
-      deleted_by: "Auto (lot depleted, alternate lot available)",
-      deleted_at: new Date().toISOString(),
-    }).eq("id", reagentId);
-    await supabase.from("audit_log").insert({
-      action: "delete",
-      entity: "reagent",
-      description: `${reagent.name} — Lot ${reagent.lot_number} (auto-removed, depleted)`,
-      performed_by: "System",
-    });
-  }
-
-  // Records which consumption_logs rows a count line created, so a completed
-  // count can find them again for date edits. A separate update so resolving
-  // still works before ADD_COUNT_LOG_LINKS.sql has been run.
-  async function linkLogs(itemId, created) {
-    if (!created || created.length === 0) return;
-    await supabase.from("inventory_count_items").update({ consumption_log_ids: created.map((r) => r.id) }).eq("id", itemId);
-  }
-
-  async function applyCorrection(item) {
-    if (item.reagent_id) {
-      await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
-      await supabase.from("audit_log").insert({
-        action: "edit",
-        entity: "reagent",
-        description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count adjustment: ${item.expected_quantity} → ${item.counted_quantity}`,
-        performed_by: username,
-      });
-      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
+  // Every discrepancy resolution, and every Edit dates line, is ONE call to an
+  // atomic database function (ADD_ATOMIC_STOCK_COUNT_FUNCTIONS.sql): the
+  // correction rows, the lot's stock, auto-removal (same rule as App.jsx's
+  // recordConsumption), the audit rows and the line's resolution commit
+  // together or not at all. The database reads the real quantities itself;
+  // what the user saw is sent only so it can refuse ("stale_line") if the line
+  // changed meanwhile. Any status other than "ok" means nothing was written,
+  // so nothing here falls back to other writes or retries on its own.
+  async function countCall(fn, args) {
+    try {
+      const { data, error } = await supabase.rpc(fn, args);
+      return !error && data && data.status ? data : { status: "error" };
+    } catch {
+      return { status: "error" };
     }
-    const resolution = resolutionUpdate("Corrected to match count", username, resolutionDetails({ method: "corrected", item }));
-    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
-    reload();
   }
+
+  function resultMessage(r) {
+    switch (r.status) {
+      case "ok": return null;
+      case "already_resolved": return "This line was already resolved (on another device or by an earlier attempt). Showing the saved result.";
+      case "stale_line": return "This line changed since it was loaded, so nothing was saved. Please review it again.";
+      case "stale_allocation": return "This line's usage entries changed since they were loaded, so nothing was changed. Please review its dates again.";
+      case "outside_window": return r.window?.ok ? outsideMsg({ ...r.window, fromSource: r.window.source }) : "That date is outside this lot's valid dates, so nothing was saved.";
+      case "window_unavailable": return windowProblem({ reason: r.window?.reason, from: r.window?.from, to: r.window?.to });
+      case "allocation_mismatch":
+      case "invalid_allocation": return "The usage entries didn't match the missing amount, so nothing was saved. Reopen this count and try again.";
+      case "allocation_unsafe": return "This line's usage entries can't be matched safely, so they weren't changed.";
+      case "no_discrepancy": return "This line no longer has a discrepancy, so nothing was saved.";
+      case "invalid_count_state": return "This count is no longer in a state that allows this, so nothing was saved. Reopen the count to see its current state.";
+      case "invalid_line_state": return "This line's dates can't be edited, so nothing was changed.";
+      case "not_found": return "This line no longer exists (the count may have been deleted), so nothing was saved.";
+      case "invalid_input": return "Nothing was saved: the request was incomplete. Reopen this count and try again.";
+      default: return "Couldn't confirm the save. Check the connection and try again — it can't be applied twice.";
+    }
+  }
+
+  // Resolves one discrepancy line. Whenever the database returns the line, that
+  // authoritative row replaces the local copy (nothing is marked resolved here
+  // on the browser's own say-so). If the call failed without an answer, the
+  // line is re-read: the save may still have gone through (a lost response).
+  async function resolveLine(item, method, extra = {}) {
+    let r = await countCall("stock_count_resolve", {
+      p_item_id: item.id,
+      p_method: method,
+      p_actor: username,
+      p_seen_expected: item.expected_quantity,
+      p_seen_counted: item.counted_quantity,
+      ...extra,
+    });
+    if (r.status === "error") {
+      const { data } = await supabase.from("inventory_count_items").select("*").eq("id", item.id);
+      if (data && data[0]?.resolved) r = { status: "already_resolved", line: data[0] };
+    }
+    if (r.line) setItems((prev) => prev.map((it) => (it.id === item.id ? r.line : it)));
+    if (r.status === "ok" || r.status === "already_resolved") setLoggingItemId((cur) => (cur === item.id ? null : cur));
+    setMsg(item.id, resultMessage(r), r.status === "already_resolved");
+    if (r.status === "ok" && method !== "kept") reload();
+    return r;
+  }
+
+  const applyCorrection = (item) => resolveLine(item, "corrected");
 
   // For a shortage specifically: the missing units were genuinely used but
   // never logged. Recording it as a real consumption_logs row (instead of
@@ -441,79 +452,20 @@ export default function StockCount({ reagents, departments, username, reload, wa
   // reorder suggestions, and "most used" reports honest. The date is left
   // to the person resolving it — we have no way to know when the units
   // actually went missing, only that they're gone now.
-  async function logUnrecordedUsage(item, date, iv) {
-    const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
-    const provenance = exactProvenance(date, localDay(activeSession.started_at));
-    if (item.reagent_id) {
-      const { data: created } = await supabase.from("consumption_logs").insert({
-        reagent_id: item.reagent_id,
-        amount: shortage,
-        date,
-        used_by: "Unlogged (physical count)",
-        note: "Retroactively logged — found missing during a physical count.",
-        source_count_item_id: item.id,
-        date_provenance: provenance,
-      }).select("id");
-      await linkLogs(item.id, created);
-      await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
-      await supabase.from("audit_log").insert({
-        action: "edit",
-        entity: "reagent",
-        description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count found ${shortage} ${item.unit} of unlogged usage, recorded as consumption dated ${date}: ${item.expected_quantity} → ${item.counted_quantity}`,
-        performed_by: username,
-      });
-      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
-    }
-    const note = `Logged as usage on ${date}`;
-    const details = resolutionDetails({ method: "usage_exact", item, window: iv, allocation: item.reagent_id ? [{ date, amount: shortage }] : [], provenance });
-    const resolution = resolutionUpdate(note, username, details);
-    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
-    setLoggingItemId(null);
-    reload();
-  }
+  // The database checks the date against the same window and records it as
+  // count_exact_default (the default day was kept) or count_exact.
+  const logUnrecordedUsage = (item, date) => resolveLine(item, "usage_exact", { p_date: date });
 
   // Same idea as logUnrecordedUsage, but for when you're confident the
   // shortage built up gradually over a known period rather than on one
   // specific day — spreads it into ~weekly entries so it doesn't show up as
-  // one artificial spike in the usage-rate charts.
-  async function logUnrecordedUsageSpread(item, fromDate, toDate, iv) {
-    const shortage = Number(item.expected_quantity) - Number(item.counted_quantity);
-    const entries = item.reagent_id ? buildSpreadEntries(shortage, fromDate, toDate) : [];
-    if (item.reagent_id) {
-      const { data: created } = await supabase.from("consumption_logs").insert(entries.map((e) => ({
-        reagent_id: item.reagent_id,
-        amount: e.amount,
-        date: e.date,
-        used_by: "Unlogged (physical count)",
-        note: `Retroactively logged — spread from ${fromDate} to ${toDate}, found missing during a physical count.`,
-        source_count_item_id: item.id,
-        date_provenance: "count_spread_window",
-      }))).select("id");
-      await linkLogs(item.id, created);
-      await supabase.from("reagents").update({ current_quantity: item.counted_quantity }).eq("id", item.reagent_id);
-      await supabase.from("audit_log").insert({
-        action: "edit",
-        entity: "reagent",
-        description: `${item.reagent_name} — Lot ${item.lot_number} — Physical count found ${shortage} ${item.unit} of unlogged usage, spread as consumption from ${fromDate} to ${toDate}: ${item.expected_quantity} → ${item.counted_quantity}`,
-        performed_by: username,
-      });
-      await autoRemoveIfDepleted(item.reagent_id, item.counted_quantity);
-    }
-    const note = `Logged as usage spread from ${fromDate} to ${toDate}`;
-    const details = resolutionDetails({ method: "usage_spread", item, window: iv, allocation: entries, provenance: "count_spread_window" });
-    const resolution = resolutionUpdate(note, username, details);
-    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
-    setLoggingItemId(null);
-    reload();
-  }
+  // one artificial spike in the usage-rate charts. The entries are built here
+  // (logSpread.js) and checked by the database: inside the window, adding up
+  // exactly to the shortage.
+  const logUnrecordedUsageSpread = (item, entries) =>
+    resolveLine(item, "usage_spread", { p_allocation: entries.map((e) => ({ date: e.date, amount: e.amount })) });
 
-  async function dismissDiscrepancy(item) {
-    const resolution = resolutionUpdate("Kept system value", username, resolutionDetails({ method: "kept", item }));
-    await supabase.from("inventory_count_items").update(resolution).eq("id", item.id);
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...resolution } : it)));
-  }
+  const dismissDiscrepancy = (item) => resolveLine(item, "kept");
 
   async function finishSession() {
     await supabase.from("inventory_counts").update({ status: "completed", completed_by: username, completed_at: new Date().toISOString() }).eq("id", activeSession.id);
@@ -676,6 +628,8 @@ export default function StockCount({ reagents, departments, username, reload, wa
                       type="number"
                       placeholder="Counted"
                       defaultValue={it.counted_quantity ?? ""}
+                      disabled={!!it.resolved}
+                      title={it.resolved ? "This line is resolved — its counted quantity can't be changed." : undefined}
                       onBlur={(e) => saveCount(it.id, e.target.value)}
                       style={{
                         width: 100, border: `1px solid ${hasMismatch ? AMBER : T.cardBorder}`, borderRadius: 7, padding: "8px 10px",
@@ -836,7 +790,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                           const entries = buildSpreadEntries(Number(it.expected_quantity) - Number(it.counted_quantity), iv.from, iv.to);
                           if (!entriesInInterval(entries, iv)) { setMsg(it.id, outsideMsg(iv)); return; }
                           setMsg(it.id, null);
-                          await logUnrecordedUsageSpread(it, iv.from, iv.to, iv);
+                          await logUnrecordedUsageSpread(it, entries);
                         })}
                         disabled={lineBusy || !win?.ok}
                         style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy || !win?.ok ? 0.6 : 1 }}
@@ -861,7 +815,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
                           const iv = countWindow(it);
                           if (!dateInInterval(logDate, iv)) { setMsg(it.id, iv.ok ? outsideMsg(iv) : windowProblem(iv)); return; }
                           setMsg(it.id, null);
-                          await logUnrecordedUsage(it, logDate, iv);
+                          await logUnrecordedUsage(it, logDate);
                         })}
                         disabled={lineBusy}
                         style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, opacity: lineBusy ? 0.6 : 1 }}
@@ -876,7 +830,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
               )}
 
               {lineMsg[it.id] && (
-                <div style={{ fontSize: 12, color: RED, marginTop: 8 }}>{lineMsg[it.id]}</div>
+                <div style={{ fontSize: 12, color: lineMsg[it.id].calm ? T.textMuted : RED, marginTop: 8 }}>{lineMsg[it.id].text}</div>
               )}
             </div>
           );
