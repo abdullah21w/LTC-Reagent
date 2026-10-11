@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { normalizeUnit } from "./units";
 
 const inputStyle = { border: "1px solid #C7D1CE", borderRadius: 7, padding: "9px 11px", fontSize: 14, boxSizing: "border-box" };
 const RED = "#C1432B";
@@ -79,15 +80,37 @@ function PerReagentView({ reagents, logs }) {
     setSelected(n);
   }
 
-  const lotsForReagent = useMemo(() => reagents.filter((r) => r.name === selected), [reagents, selected]);
+  const allLotsForReagent = useMemo(() => reagents.filter((r) => r.name === selected), [reagents, selected]);
+  // A reagent's lots can be recorded in different units (box, Piece …). Each
+  // unit is charted on its own — amounts in different units are never added.
+  // The picker defaults to the unit with the most usage in the date range.
+  const unitOptions = useMemo(() => {
+    const m = new Map();
+    for (const r of allLotsForReagent) {
+      const k = normalizeUnit(r.unit).key;
+      if (!m.has(k)) m.set(k, { key: k, label: String(r.unit ?? "").trim() || "(unit not recorded)", ids: new Set(), used: 0 });
+      m.get(k).ids.add(r.id);
+    }
+    const opts = [...m.values()];
+    for (const l of logs) {
+      if (l.deleted || l.date < dateFrom || l.date > dateTo) continue;
+      const o = opts.find((x) => x.ids.has(l.reagent_id));
+      if (o) o.used += Number(l.amount || 0);
+    }
+    return opts;
+  }, [allLotsForReagent, logs, dateFrom, dateTo]);
+  const [unitPick, setUnitPick] = useState(null);
+  const defaultUnit = unitOptions.length ? [...unitOptions].sort((a, b) => b.used - a.used)[0].key : null;
+  const unitKey = unitOptions.some((u) => u.key === unitPick) ? unitPick : defaultUnit;
+  const lotsForReagent = useMemo(() => allLotsForReagent.filter((r) => normalizeUnit(r.unit).key === unitKey), [allLotsForReagent, unitKey]);
   const lotIds = useMemo(() => new Set(lotsForReagent.map((r) => r.id)), [lotsForReagent]);
-  const unit = lotsForReagent[0]?.unit || "";
+  const unit = unitOptions.find((u) => u.key === unitKey)?.label || "";
 
   const rangeLogs = useMemo(
     () => logs.filter((l) => lotIds.has(l.reagent_id) && !l.deleted && l.date >= dateFrom && l.date <= dateTo),
     [logs, lotIds, dateFrom, dateTo]
   );
-  const totalConsumed = rangeLogs.reduce((s, l) => s + l.amount, 0);
+  const totalConsumed = Math.round(rangeLogs.reduce((s, l) => s + Number(l.amount || 0), 0) * 100) / 100;
 
   const dailyData = useMemo(() => {
     if (!dateFrom || !dateTo || dateFrom > dateTo) return [];
@@ -149,6 +172,23 @@ function PerReagentView({ reagents, logs }) {
         <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={inputStyle} />
       </div>
 
+      {unitOptions.length > 1 && (
+        <div style={{ background: "#F7F9F8", border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 12px", marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, color: "#3A4A48", marginBottom: 8 }}>This reagent has lots recorded in {unitOptions.length} different units. Each unit is shown on its own; amounts in different units are never added together.</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {unitOptions.map((u) => (
+              <button
+                key={u.key}
+                onClick={() => setUnitPick(u.key)}
+                style={{ background: unitKey === u.key ? "#0F7173" : "#fff", color: unitKey === u.key ? "#fff" : "#516361", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12.5, fontWeight: 700 }}
+              >
+                {u.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {lotsForReagent.length === 0 ? (
         <div style={{ textAlign: "center", padding: "40px 20px", color: MUTED, fontSize: 13.5 }}>No matching reagent — pick one from the list.</div>
       ) : dateFrom > dateTo ? (
@@ -200,9 +240,10 @@ function PerReagentView({ reagents, logs }) {
 // The lab-wide and per-department ratios are computed by LOT COUNT
 // (unit-agnostic) since a department spans reagents with different units
 // (box/piece/bottle) that can't be summed. The per-reagent ratio is the only
-// one computed by QUANTITY, since a single reagent's lots always share one
-// unit — and discarding never zeroes current_quantity, so it still holds
-// exactly what was left over at the moment of discard.
+// one computed by QUANTITY — per reagent AND unit, since one reagent's lots
+// can be recorded in different units (U2b) — and discarding never zeroes
+// current_quantity, so it still holds exactly what was left over at the
+// moment of discard.
 function WasteRatioView({ reagents, departments }) {
   const [detailLevel, setDetailLevel] = useState("department"); // department | reagent
   const [deptFilter, setDeptFilter] = useState("");
@@ -250,8 +291,9 @@ function WasteRatioView({ reagents, departments }) {
     const scoped = deptFilter ? reagents.filter((r) => r.department === deptFilter) : reagents;
     const map = {};
     scoped.forEach((r) => {
-      if (!map[r.name]) map[r.name] = { name: r.name, department: r.department, unit: r.unit, lotsReceived: 0, lotsWasted: 0, qtyReceived: 0, qtyWasted: 0 };
-      const row = map[r.name];
+      const key = `${r.name}::${normalizeUnit(r.unit).key}`;
+      if (!map[key]) map[key] = { key, name: r.name, department: r.department, unit: r.unit, lotsReceived: 0, lotsWasted: 0, qtyReceived: 0, qtyWasted: 0 };
+      const row = map[key];
       row.lotsReceived += 1;
       row.qtyReceived += Number(r.quantity_received || 0);
       if (r.discard_reason === "Expired") {
@@ -365,7 +407,7 @@ function WasteRatioView({ reagents, departments }) {
                 </thead>
                 <tbody>
                   {byReagent.map((r) => (
-                    <tr key={r.name} style={{ borderTop: `1px solid ${BORDER}` }}>
+                    <tr key={r.key} style={{ borderTop: `1px solid ${BORDER}` }}>
                       <td style={{ padding: "9px 12px", fontWeight: 600 }}>{r.name}</td>
                       <td style={{ padding: "9px 12px", color: MUTED }}>{r.department}</td>
                       <td style={{ padding: "9px 12px", textAlign: "right", color: MUTED }}>{r.lotsReceived}</td>

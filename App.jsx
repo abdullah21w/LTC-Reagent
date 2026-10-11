@@ -12,7 +12,7 @@ import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
 import { planLotEdit, describeInBoxes } from "./lotEdit";
-import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
+import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -99,6 +99,24 @@ function formatCartonQty(qty, unitsPerCarton, unit) {
   if (!unitsPerCarton || unitsPerCarton <= 0) return { main: `${qty} ${unit}`, sub: null };
   const cartons = Math.floor(qty / unitsPerCarton);
   return { main: `${cartons} box${cartons === 1 ? "" : "es"}`, sub: `${qty} ${unit} remaining` };
+}
+
+// U2b — quantity displays that never add different units together. The main
+// text is always the stored base quantity; `sub` is a pack equivalent
+// (forecast.js packEquivalentText: presentation only, neutral wording unless
+// the lot has a saved pack label).
+const unitText = (u) => String(u ?? "").trim();
+function lotQtyView(lot) {
+  const unit = unitText(lot.unit);
+  return { main: `${fmtQty(lot.current_quantity)} ${unit}`.trim(), sub: packEquivalentText(lot.current_quantity, packEquivalent([lot]), unit) };
+}
+function partQtyText(p) {
+  return `${fmtQty(p.totalQty)} ${unitText(p.unit)}`.trim();
+}
+function groupQtyView(g) {
+  if (g.mixedUnits) return { main: g.parts.map(partQtyText).join(" · "), sub: "different units — not added together" };
+  const p = g.parts[0];
+  return { main: partQtyText(p), sub: packEquivalentText(p.totalQty, p.pack, unitText(p.unit)) };
 }
 
 const LOT_TO_LOT_DEVICES = ["vitros"];
@@ -618,39 +636,13 @@ export default function App() {
 
   const warnDays = config?.expiry_warning_days ?? 30;
 
-  const groups = useMemo(() => {
-    if (!reagents) return [];
-    const active = reagents.filter((r) => !r.deleted);
-    const map = {};
-    for (const r of active) {
-      const key = `${r.name}::${r.device || ""}`;
-      if (!map[key]) map[key] = [];
-      map[key].push(r);
-    }
-    // Usage over the last 30 days per reagent+device, counted across ALL of
-    // the group's lots (including ones that have since run out or been
-    // removed) — see forecast.js. Stock below still counts active lots only.
-    const recentUsage = recentUsageByGroup(reagents, logs, todayISO());
-    return Object.entries(map).map(([key, items]) => {
-      const sorted = [...items].sort(compareLots);
-      const totalQty = items.reduce((s, i) => s + i.current_quantity, 0);
-      const totalReceived = items.reduce((s, i) => s + i.quantity_received, 0);
-      const anyExpiredOrEmpty = items.some((i) => (i.expiry_date && daysBetween(i.expiry_date, todayISO()) < 0) || i.current_quantity <= 0);
-      const flagged = items.some(hasInspectionIssue);
-      const lowStockRaw = totalQty > 0 && totalQty <= sorted[0].low_stock_threshold;
-      const activeSnooze = (snoozes || []).find((s) => s.reagent_name === items[0].name && s.device === (items[0].device || "") && s.snoozed_until >= todayISO());
-      const lowStock = lowStockRaw && !activeSnooze;
-      const snoozedUntil = activeSnooze ? activeSnooze.snoozed_until : null;
-      const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
-      const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
-
-      const recentUsed = recentUsage[key] || 0;
-      const dailyRate = recentUsed / 30;
-      const predictedDaysLeft = dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
-
-      return { key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0], totalQty, totalReceived, status: worstStatus, department: items[0].department, unit: items[0].unit, flagged, lowStock, lowStockRaw, snoozedUntil, expiringSoon, recentUsed, dailyRate, predictedDaysLeft };
-    });
-  }, [reagents, warnDays, logs, snoozes]);
+  // Reagent groups (name + device), per-unit parts and forecasts — see
+  // forecast.js buildGroups. App's own helpers are passed in so the status,
+  // FEFO and expiry rules stay exactly these.
+  const groups = useMemo(
+    () => buildGroups(reagents, logs, { snoozes, warnDays, today: todayISO(), compareLots, daysBetween, hasInspectionIssue, isExpiringSoonItem }),
+    [reagents, warnDays, logs, snoozes]
+  );
 
   const counts = useMemo(() => {
     const c = { red: 0, yellow: 0, green: 0, flagged: 0, lowStock: 0, expiringSoon: 0 };
@@ -961,7 +953,7 @@ function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
           {lowStockList.map((g) => (
             <div key={g.key} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
               <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{g.name}</span>
-              <span style={{ color: "#8A9694" }}>{g.totalQty} {g.unit} left</span>
+              <span style={{ color: "#8A9694" }}>{groupQtyView(g).main} left</span>
             </div>
           ))}
         </div>
@@ -972,7 +964,7 @@ function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
           {predictedList.map((g) => (
             <div key={g.key} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #EEF2F0", fontSize: 13 }}>
               <span style={{ color: "#1B2B2E", fontWeight: 600 }}>{g.name}</span>
-              <span style={{ color: "#EA580C" }}>~{g.predictedDaysLeft}d left</span>
+              <span style={{ color: "#EA580C" }}>~{g.predictedDaysLeft}d left{g.forecastPart?.lowEvidence && <span title={lowEvidenceLabel(g.forecastPart.evidence)} style={{ fontWeight: 600 }}> · low evidence</span>}</span>
             </div>
           ))}
         </div>
@@ -1012,7 +1004,7 @@ function PublicSummaryPage({ groups, counts, logs, reagents, departments }) {
               <div key={g.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid #EEF2F0" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1B2B2E" }}>{g.name}</div>
-                  <div style={{ fontSize: 11.5, color: "#8A9694" }}>{g.department}{g.device ? ` · ${g.device}` : ""} · {g.totalQty} {g.unit}</div>
+                  <div style={{ fontSize: 11.5, color: "#8A9694" }}>{g.department}{g.device ? ` · ${g.device}` : ""} · {groupQtyView(g).main}</div>
                 </div>
                 <span style={{ fontSize: 11, fontWeight: 700, color: m.color, background: m.bg, borderRadius: 6, padding: "3px 8px", flexShrink: 0 }}>{m.label}</span>
               </div>
@@ -1309,14 +1301,18 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
+  // Totals per reagent name AND unit — amounts in different units are never
+  // added. A log whose lot row no longer exists keeps counting, under its own
+  // "unit unknown" row rather than being dropped or merged.
   const mostUsedMap = {};
   (logs || []).forEach((l) => {
     if (l.deleted || new Date(l.date) < monthStart) return;
     const r = reagentById[l.reagent_id];
-    if (!r) return;
-    mostUsedMap[r.name] = (mostUsedMap[r.name] || 0) + Number(l.amount || 0);
+    const k = r ? `${r.name}::${lotUnitKey(r)}` : "::unknown";
+    if (!mostUsedMap[k]) mostUsedMap[k] = { key: k, name: r ? r.name : "Unknown (lot no longer on record)", unit: r ? unitText(r.unit) : "unit unknown", qty: 0 };
+    mostUsedMap[k].qty += Number(l.amount || 0);
   });
-  const mostUsedList = Object.entries(mostUsedMap).map(([name, qty]) => ({ name, qty, unit: groups.find((g) => g.name === name)?.unit || "" })).sort((a, b) => b.qty - a.qty).slice(0, 5);
+  const mostUsedList = Object.values(mostUsedMap).sort((a, b) => b.qty - a.qty).slice(0, 5);
 
   const snoozedGroups = groups.filter((g) => g.snoozedUntil);
 
@@ -1331,10 +1327,12 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
       byDate[iso] = entry;
       pulseData.push(entry);
     }
+    // Number of usage entries per day — amounts are in many different units
+    // (box, bottle, piece …), so they are not added together.
     (logs || []).forEach((l) => {
       if (l.deleted) return;
       const entry = byDate[l.date];
-      if (entry) entry.total += Number(l.amount || 0);
+      if (entry) entry.total += 1;
     });
   }
   const pulseTotal = pulseData.reduce((s, d) => s + d.total, 0);
@@ -1436,9 +1434,10 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                     const m = STATUS_META[g.status];
                     const tone = DASH_TONE[g.status];
                     const dExp = g.fefo.expiry_date ? daysBetween(g.fefo.expiry_date, todayISO()) : null;
-                    const q = formatCartonQty(g.totalQty, g.fefo.units_per_carton, g.unit);
+                    const q = groupQtyView(g);
                     const isOpen = expanded.has(g.key);
                     const lastLog = lastLogFor(g);
+                    const lastLogLot = lastLog ? g.items.find((i) => i.id === lastLog.reagent_id) : null;
                     const expText = dExp === null ? "no expiry" : dExp < 0 ? `expired ${Math.abs(dExp)}d ago` : `expires in ${dExp}d`;
                     return (
                       <div key={g.key} className="dash-row" style={{ background: THEME.cardBg, border: `1px solid ${isOpen ? "var(--border-strong)" : THEME.cardBorder}`, borderRadius: 8, overflow: "hidden", transition: "border-color .12s" }}>
@@ -1485,7 +1484,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                               </div>
                               <div>
                                 <div style={eyebrow}>Last used</div>
-                                <div style={{ color: THEME.text }}>{lastLog ? `${lastLog.date} · ${lastLog.amount} ${g.unit} by ${lastLog.used_by}` : "—"}</div>
+                                <div style={{ color: THEME.text }}>{lastLog ? `${lastLog.date} · ${fmtQty(lastLog.amount)} ${unitText(lastLogLot?.unit)} by ${lastLog.used_by}` : "—"}</div>
                               </div>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${THEME.cardBorder}` }}>
@@ -1533,13 +1532,15 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
             {predictedList.length === 0 && <div style={emptyNote}>Nothing predicted to run low in the next 2 weeks, based on recent usage.</div>}
             {predictedList.map((g, i) => {
               const sev = g.predictedDaysLeft <= 3 ? "red" : "expiring";
+              const fp = g.forecastPart;
+              const fpUnit = unitText(fp.unit);
               return (
                 <div key={g.key} className="dash-click" onClick={() => onSelect(g)} style={{ ...listRow(i === predictedList.length - 1), cursor: "pointer" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                     <StatusDot tone={sev} size={7} />
                     <div style={{ minWidth: 0 }}>
                       <div style={rowTitle}>{g.name}{g.device && <span style={{ fontWeight: 500, color: THEME.textMuted }}> · {g.device}</span>}</div>
-                      <div style={rowSub}>~{g.dailyRate.toFixed(1)} {g.unit}/day · {g.totalQty} {g.unit} left</div>
+                      <div style={rowSub}>~{fp.dailyRate.toFixed(1)} {fpUnit}/day · {fmtQty(fp.totalQty)} {fpUnit} left{g.mixedUnits ? ` (${fpUnit} stock only)` : ""}{fp.lowEvidence && <span title={lowEvidenceLabel(fp.evidence)} style={{ color: "var(--warning)", fontWeight: 600 }}> · low evidence</span>}</div>
                     </div>
                   </div>
                   <span style={{ fontSize: 12, fontWeight: 700, color: DASH_TONE[sev].color, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 }}>~{g.predictedDaysLeft}d</span>
@@ -1574,10 +1575,10 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
             })}
           </Panel>
 
-          <Panel title="14-day activity" action={<span style={{ fontSize: 11, color: THEME.textMuted }}>All departments</span>}>
+          <Panel title="14-day activity" action={<span style={{ fontSize: 11, color: THEME.textMuted }}>Usage entries, all departments</span>}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 0 4px" }}>
               <span style={{ fontSize: 26, fontWeight: 700, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: -0.5 }}>{pulseTotal}</span>
-              <span style={{ fontSize: 11.5, color: THEME.textMuted }}>units consumed</span>
+              <span style={{ fontSize: 11.5, color: THEME.textMuted }}>usage entries logged (a count of entries, not quantities)</span>
             </div>
             <div style={{ width: "100%", height: 180, marginTop: 4 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -1592,7 +1593,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#94A3B8" }} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
                   <YAxis tick={{ fontSize: 10, fill: "#94A3B8" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
                   <Tooltip
-                    formatter={(v) => [`${v} units`, "Used"]}
+                    formatter={(v) => [`${v} entr${v === 1 ? "y" : "ies"}`, "Logged"]}
                     labelFormatter={(_, p) => (p && p[0] ? p[0].payload.label : "")}
                     contentStyle={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, fontSize: 12, color: THEME.text, boxShadow: "0 4px 12px rgba(15,23,42,0.08)" }}
                     cursor={{ stroke: "#94A3B8", strokeDasharray: "3 3" }}
@@ -1622,13 +1623,13 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
           <Panel flush title="Most used this month">
             {mostUsedList.length === 0 && <div style={emptyNote}>No consumption logged yet this month.</div>}
             {mostUsedList.map((mu, i) => (
-              <div key={mu.name} style={{ padding: "8px 14px", borderBottom: i === mostUsedList.length - 1 ? "none" : `1px solid ${THEME.cardBorder}` }}>
+              <div key={mu.key} style={{ padding: "8px 14px", borderBottom: i === mostUsedList.length - 1 ? "none" : `1px solid ${THEME.cardBorder}` }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: THEME.textMuted, width: 18, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{String(i + 1).padStart(2, "0")}</span>
                     <span style={rowTitle}>{mu.name}</span>
                   </div>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0, whiteSpace: "nowrap" }}>{mu.qty} <span style={{ color: THEME.textMuted, fontWeight: 500 }}>{mu.unit}</span></span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: THEME.text, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtQty(mu.qty)} <span style={{ color: THEME.textMuted, fontWeight: 500 }}>{mu.unit}</span></span>
                 </div>
                 <div style={{ marginLeft: 26, marginTop: 5, height: 3, borderRadius: 2, background: "var(--surface-2)", overflow: "hidden" }}>
                   <div style={{ width: `${mostUsedMax > 0 ? Math.max(4, (mu.qty / mostUsedMax) * 100) : 0}%`, height: "100%", background: "var(--primary-light)", borderRadius: 2 }} />
@@ -1690,8 +1691,8 @@ function DevicesBoard({ reagents, devices, warnDays, can, onEdit, onDelete, onDi
                       <div style={{ fontSize: 13.5, fontWeight: 600, color: THEME.text }}>{r.name}</div>
                       <div style={{ fontSize: 11.5, color: THEME.textMuted }}>
                         Lot {r.lot_number} · {(() => {
-                          const q = formatCartonQty(r.current_quantity, r.units_per_carton, r.unit);
-                          return q.sub ? `${q.main} (${q.sub})` : `${q.main} left`;
+                          const q = lotQtyView(r);
+                          return q.sub ? `${q.main} left (${q.sub})` : `${q.main} left`;
                         })()}
                       </div>
                     </div>
@@ -1747,8 +1748,18 @@ function HistoryPage({ reagents, logs }) {
   const lotById = {};
   lots.forEach((l) => { lotById[l.id] = l; });
 
-  const totalReceived = lots.reduce((s, l) => s + Number(l.quantity_received || 0), 0);
-  const totalRemaining = lots.reduce((s, l) => s + Number(l.current_quantity || 0), 0);
+  // Totals per unit — lots of one name can be recorded in different units.
+  const byUnitTotal = (field) => {
+    const m = new Map();
+    for (const l of lots) {
+      const k = lotUnitKey(l);
+      if (!m.has(k)) m.set(k, { unit: unitText(l.unit), qty: 0 });
+      m.get(k).qty += Number(l[field] || 0);
+    }
+    return [...m.values()].map((x) => `${fmtQty(x.qty)} ${x.unit}`.trim()).join(" · ") || "0";
+  };
+  const totalReceived = byUnitTotal("quantity_received");
+  const totalRemaining = byUnitTotal("current_quantity");
 
   return (
     <div>
@@ -2046,12 +2057,17 @@ function CalendarPage({ reagents, groups, onSelectGroup }) {
 }
 
 function ReorderPage({ groups, coverageDays, onSelectGroup }) {
+  // One row per reagent and unit: each unit's own stock and usage rate (U2b).
+  // A pack equivalent is shown beside the base quantity only when all of that
+  // unit's lots share one box size; it is never part of the calculation.
   const suggestions = groups
-    .map((g) => {
-      const { target, suggestedQty } = reorderSuggestion(g.dailyRate, g.totalQty, coverageDays);
-      return { ...g, target, suggestedQty };
-    })
-    .filter((g) => g.dailyRate > 0 && g.suggestedQty > 0)
+    .flatMap((g) => g.parts.map((p) => {
+      const { target, suggestedQty } = reorderSuggestion(p.dailyRate, p.totalQty, coverageDays);
+      const unit = unitText(p.unit);
+      const packs = p.pack && p.pack.perBox > 1 ? Math.ceil(suggestedQty / p.pack.perBox) : null;
+      return { group: g, rowKey: `${g.key}::${p.key}`, name: g.name, device: g.device, mixed: g.mixedUnits, unit, dailyRate: p.dailyRate, totalQty: p.totalQty, target, suggestedQty, packs, pack: p.pack, lowEvidence: p.lowEvidence, evidence: p.evidence };
+    }))
+    .filter((r) => r.dailyRate > 0 && r.suggestedQty > 0)
     .sort((a, b) => b.suggestedQty - a.suggestedQty);
 
   return (
@@ -2067,6 +2083,11 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
 
       <Panel title={`Suggested reorders (${suggestions.length})`}>
         {suggestions.length === 0 && <div style={{ fontSize: 13, color: THEME.textMuted }}>Nothing needs reordering right now based on current usage rates.</div>}
+        {suggestions.some((r) => r.lowEvidence) && (
+          <div style={{ fontSize: 12, color: THEME.textMuted, marginBottom: 10 }}>
+            <b style={{ color: "var(--warning)" }}>Low evidence</b> = the usage rate rests only on stock-count corrections or on a single usage log; treat that suggestion as a rough estimate.
+          </div>
+        )}
         {suggestions.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -2080,13 +2101,17 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
                 </tr>
               </thead>
               <tbody>
-                {suggestions.map((g) => (
-                  <tr key={g.key} onClick={() => onSelectGroup(g)} style={{ borderTop: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
-                    <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{g.name}</td>
-                    <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{g.device || "—"}</td>
-                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{g.dailyRate.toFixed(1)} {g.unit}</td>
-                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{g.totalQty} {g.unit}</td>
-                    <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 700, color: THEME.primary }}>{g.suggestedQty} {g.unit}</td>
+                {suggestions.map((r) => (
+                  <tr key={r.rowKey} onClick={() => onSelectGroup(r.group)} style={{ borderTop: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
+                    <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name}{r.mixed && <span style={{ fontWeight: 500, color: THEME.textMuted }}> ({r.unit})</span>}</td>
+                    <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
+                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{r.dailyRate.toFixed(1)} {r.unit}</td>
+                    <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{fmtQty(r.totalQty)} {r.unit}</td>
+                    <td style={{ padding: "9px 0", textAlign: "right", fontWeight: 700, color: THEME.primary }}>
+                      {fmtQty(r.suggestedQty)} {r.unit}
+                      {r.packs !== null && <div style={{ fontSize: 11, fontWeight: 500, color: THEME.textMuted }}>≈ {r.packs} × {r.pack.perBox}-{unitText(r.unit)} pack{r.packs === 1 ? "" : "s"}, rounded up</div>}
+                      {r.lowEvidence && <div title={lowEvidenceLabel(r.evidence)} style={{ fontSize: 11, fontWeight: 600, color: "var(--warning)" }}>Low evidence</div>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -2208,14 +2233,35 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   // All forecast values come from App's shared `groups` (forecast.js) — the
   // same numbers the Dashboard, Reorder and the public summary show.
   const today = todayISO();
-  const unit = (group.unit || "").trim();
-  const totalQty = group.totalQty;
-  const consumed30 = group.recentUsed ?? 0;
-  const avgDaily = group.dailyRate ?? 0;
-  const daysLeft = group.predictedDaysLeft ?? null;
-  const runOut = runOutDate(today, daysLeft);
-  const breakdown = usageBreakdown(group.key, allReagents, allLogs, today);
-  const reorder = reorderSuggestion(avgDaily, totalQty, coverageDays);
+  // U2b — one forecast per unit (group.parts). A single-unit group has one
+  // part with exactly the group's previous numbers; a mixed-unit group gets
+  // one block per unit and no combined total.
+  const mixed = group.mixedUnits;
+  const partViews = group.parts.map((p) => {
+    const breakdown = usageBreakdown(group.key, allReagents, allLogs, today, p.key);
+    const outlook = expiryOutlook(p.lots, p.dailyRate, today, { logCount: breakdown.logCount, stockCountCount: breakdown.stockCount.count });
+    return {
+      key: p.key,
+      unit: unitText(p.unit),
+      lots: p.lots,
+      totalQty: p.totalQty,
+      consumed30: p.recentUsed,
+      avgDaily: p.dailyRate,
+      daysLeft: p.predictedDaysLeft,
+      runOut: runOutDate(today, p.predictedDaysLeft),
+      breakdown,
+      reorder: reorderSuggestion(p.dailyRate, p.totalQty, coverageDays),
+      outlook,
+      risk: stockAtRisk(outlook),
+      exc: expiryExceptions(outlook),
+      evidence: p.evidence,
+      lowEvidence: p.lowEvidence,
+      nextLot: p.lots[0],
+      threshold: p.threshold,
+      lowStockRaw: p.lowStockRaw,
+      packText: packEquivalentText(p.totalQty, p.pack, unitText(p.unit)),
+    };
+  });
   // Full lot history and usage history across ALL of this reagent's lots,
   // including ended ones (read-only; see forecast.js).
   const lotHist = lotHistory(group.key, allReagents, allLogs, today);
@@ -2236,21 +2282,13 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     return s;
   };
   const linkedLotLabel = (r) => (r.lotNumber === null ? "(a lot no longer on record)" : lotLabel(r.lotId, r.lotNumber));
-  // Expiry outlook for the lots in stock — FEFO order from group.items, the
-  // shared forecast rate, and the usage evidence behind that rate. All numbers
-  // shown below come from this output (forecast.js expiryOutlook).
-  const outlook = expiryOutlook(group.items, avgDaily, today, { logCount: breakdown.logCount, stockCountCount: breakdown.stockCount.count });
-  const outlookByLot = Object.fromEntries(outlook.map((o) => [o.lotId, o]));
-  const expiryExc = expiryExceptions(outlook);
-  // Batch 4 — evidence behind the forecast (M1) and the stock the forecast
-  // still counts although it is expired or may expire first (M2 / S1).
-  // Informational only: the forecast numbers themselves are unchanged.
-  const evidence = usageEvidence(group.key, allReagents, allLogs, today);
-  const risk = stockAtRisk(outlook);
+  // Expiry outlook per unit: each unit's lots in FEFO order, at that unit's
+  // own rate (forecast.js expiryOutlook). All numbers below come from it.
+  const outlookByLot = Object.fromEntries(partViews.flatMap((pv) => pv.outlook.map((o) => [o.lotId, o])));
+  const allOutlook = partViews.flatMap((pv) => pv.outlook);
   const logsWord = (n) => `${n} usage log${n === 1 ? "" : "s"}`;
   const daysAgo = (n) => (n === 0 ? "today" : `${n} day${n === 1 ? "" : "s"} ago`);
-  const forecastEvidenceText = (() => {
-    const e = evidence;
+  const forecastEvidenceText = (e) => {
     const last = e.lastLogDate ? `most recent usage logged ${fmtDay(e.lastLogDate)} (${daysAgo(e.daysSinceLastLog)})` : null;
     if (e.category === "none") return last ? `No usage logged in the last 30 days · ${last}` : "No usage has ever been logged for this reagent";
     let s;
@@ -2261,7 +2299,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     if (last) s += ` · ${last}`;
     if (e.category === "corrections_only" && e.lastNormalLogDate) s += ` · last normal usage log ${fmtDay(e.lastNormalLogDate)}`;
     return s;
-  })();
+  };
   // Batch 6 — record consistency (forecast.js). Facts only: nothing is merged,
   // converted or recalculated, and no record is called right or wrong.
   const related = relatedStockGroups(group.key, allReagents);
@@ -2333,7 +2371,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
     return parts.join(" · ");
   })();
   const expiresInText = (d) => (d === 0 ? "expires today" : `expires in ${d} day${d === 1 ? "" : "s"}`);
-  const outlookLine = (o) => {
+  const outlookLine = (o, unit) => {
     if (!o) return null;
     if (o.state === "used_up_before_expiry") return { tone: "muted", text: "Expected to be used up before expiry" };
     if (o.state === "may_expire_with_leftover") {
@@ -2349,40 +2387,26 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const reasonText = (r) => {
     if (r.kind === "expired") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> expired {Math.abs(r.days)} day{Math.abs(r.days) === 1 ? "" : "s"} ago → Critical</>;
     if (r.kind === "empty") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> is empty (0 left) → Critical</>;
-    if (r.kind === "low_stock") return <>Low stock: {fmtQty(r.totalQty)} {unit} left, at or below the threshold of {fmtQty(r.threshold)} {unit} → Watch</>;
-    if (r.kind === "low_stock_snoozed") return <>Low stock ({fmtQty(r.totalQty)} {unit}, threshold {fmtQty(r.threshold)}), but the alert is snoozed{r.snoozedUntil ? ` until ${r.snoozedUntil}` : ""}, so it isn't counted</>;
+    if (r.kind === "low_stock") return <>Low stock: {fmtQty(r.totalQty)} {unitText(r.unit)} left, at or below the threshold of {fmtQty(r.threshold)} {unitText(r.unit)} → Watch</>;
+    if (r.kind === "low_stock_snoozed") return <>Low stock ({fmtQty(r.totalQty)} {unitText(r.unit)}, threshold {fmtQty(r.threshold)}), but the alert is snoozed{r.snoozedUntil ? ` until ${r.snoozedUntil}` : ""}, so it isn't counted</>;
     if (r.kind === "expiring_soon") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> {expiresInText(r.days)} (within the {why.warnDays}-day expiry warning) → Watch</>;
     return null;
   };
-  const nextLot = group.fefo || group.items[0];
-  const threshold = nextLot ? nextLot.low_stock_threshold : null;
   const statusTone = DASH_TONE[group.status] || DASH_TONE.green;
-
-  const daysTone = daysLeft === null ? null : daysLeft <= 3 ? "red" : daysLeft <= 14 ? "low" : null;
-
-  let lowTone, lowText;
-  if (totalQty <= 0) {
-    lowTone = "red";
-    lowText = "Out of stock — shown as Critical rather than Low stock.";
-  } else if (group.lowStockRaw) {
-    lowTone = "low";
-    lowText = `Low stock: ${fmtQty(totalQty)} ${unit} left, at or below the threshold of ${fmtQty(threshold)} ${unit}.${group.snoozedUntil ? ` Alert snoozed until ${group.snoozedUntil}.` : ""}`;
-  } else {
-    lowTone = "green";
-    lowText = `Not low: ${fmtQty(totalQty)} ${unit} left, above the threshold of ${fmtQty(threshold)} ${unit}.`;
-  }
-
-  let reorderTone, reorderText;
-  if (avgDaily <= 0) {
-    reorderTone = null;
-    reorderText = "No reorder suggestion — no usage logged in the last 30 days.";
-  } else if (reorder.needed) {
-    reorderTone = "primary";
-    reorderText = `Suggest ordering ${fmtQty(reorder.suggestedQty)} ${unit} to cover ${coverageDays} days at the current rate.`;
-  } else {
-    reorderTone = "green";
-    reorderText = `No reorder needed — ${fmtQty(totalQty)} ${unit} in stock covers the ${coverageDays}-day target of ${fmtQty(reorder.target)} ${unit}.`;
-  }
+  // Per-unit tones and sentences for the Status & forecast blocks.
+  const daysToneOf = (pv) => (pv.daysLeft === null ? null : pv.daysLeft <= 3 ? "red" : pv.daysLeft <= 14 ? "low" : null);
+  const lowOf = (pv) => {
+    const { unit, totalQty, threshold } = pv;
+    if (totalQty <= 0) return { tone: "red", text: "Out of stock — shown as Critical rather than Low stock." };
+    if (pv.lowStockRaw) return { tone: "low", text: `Low stock: ${fmtQty(totalQty)} ${unit} left, at or below the threshold of ${fmtQty(threshold)} ${unit}.${group.snoozedUntil ? ` Alert snoozed until ${group.snoozedUntil}.` : ""}` };
+    return { tone: "green", text: `Not low: ${fmtQty(totalQty)} ${unit} left, above the threshold of ${fmtQty(threshold)} ${unit}.` };
+  };
+  const reorderOf = (pv) => {
+    const { unit, totalQty, reorder, avgDaily } = pv;
+    if (avgDaily <= 0) return { tone: null, text: `No reorder suggestion — no usage${mixed ? ` in ${unit}` : ""} logged in the last 30 days.` };
+    if (reorder.needed) return { tone: "primary", text: `Suggest ordering ${fmtQty(reorder.suggestedQty)} ${unit} to cover ${coverageDays} days at the current rate.` };
+    return { tone: "green", text: `No reorder needed — ${fmtQty(totalQty)} ${unit} in stock covers the ${coverageDays}-day target of ${fmtQty(reorder.target)} ${unit}.` };
+  };
 
   const inspectionLabels = {
     intact_container: "Intact container",
@@ -2439,10 +2463,11 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
       </div>
 
       {/* ── Needs attention (expired stock + expiry exceptions; hidden when empty) */}
-      {(risk.expiredLots.length > 0 || expiryExc.length > 0) && (
+      {partViews.some((pv) => pv.risk.expiredLots.length > 0 || pv.exc.length > 0) && (
         <div style={{ marginBottom: 20 }}>
           <div style={sectionHeading}>Needs attention</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {partViews.map(({ key: pk, unit, risk, exc: expiryExc }) => (<React.Fragment key={pk}>
             {risk.expiredLots.map((x) => (
               <ShellAlert key={`expired-${x.lotId}`} tone="critical" icon={<AlertTriangle size={15} />}>
                 Lot <b style={{ fontFamily: MONO }}>{lotLabel(x.lotId, x.lotNumber)}</b> expired {daysAgo(Math.abs(x.daysToExpiry))} ({fmtDay(x.expiryDate)}) — <b>{fmtQty(x.qty)} {unit}</b> still in stock.
@@ -2454,25 +2479,40 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                 <span style={{ color: THEME.textMuted }}> At the current rate ({fmtQty(o.rate, 3)} {unit}/day, from {evidenceText(o.evidence)}), about {fmtQty(o.expectedUsed)} {unit} is expected to be used before then.</span>
               </ShellAlert>
             ))}
+            </React.Fragment>))}
           </div>
         </div>
       )}
 
-      {/* ── Status & forecast ───────────────────────────────────────────── */}
-      <section style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, padding: 18, marginBottom: 28 }}>
+      {/* ── Status & forecast (one block per unit; one block for a single-unit reagent) ── */}
+      {mixed && (
+        <div style={{ marginBottom: 12, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 12.5, color: THEME.text, lineHeight: 1.5 }}>
+          <b>Stock is recorded in {partViews.length} different units</b> ({partViews.map((pv) => pv.unit).join(", ")}). Each unit has its own stock, usage and forecast below. They are never added together or converted into each other.
+        </div>
+      )}
+      {partViews.map((pv) => {
+        const { unit, totalQty, consumed30, avgDaily, daysLeft, runOut, breakdown, reorder, risk, evidence, nextLot, threshold, outlook } = pv;
+        const daysTone = daysToneOf(pv);
+        const { tone: lowTone, text: lowText } = lowOf(pv);
+        const { tone: reorderTone, text: reorderText } = reorderOf(pv);
+        // Low evidence (forecast.js isLowEvidence, decided once per unit in buildGroups).
+        const lowEvidence = pv.lowEvidence;
+        const lowEvidenceText = lowEvidenceLabel(evidence);
+        return (
+      <section key={pv.key} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 10, boxShadow: THEME.cardShadow, padding: 18, marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>Status &amp; forecast</div>
-          <div style={{ fontSize: 12, color: THEME.textMuted }}>Based on usage logged in the last 30 days</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: THEME.text }}>Status &amp; forecast{mixed ? ` — stock in ${unit}` : ""}</div>
+          <div style={{ fontSize: 12, color: THEME.textMuted }}>Based on usage logged in the last 30 days{mixed ? ` on lots recorded in ${unit}` : ""}</div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
-          <ForecastTile label="In stock" value={fmtQty(totalQty)} unit={unit} sub={`Across ${group.items.length} lot${group.items.length === 1 ? "" : "s"} in stock`} tone={totalQty <= 0 ? "red" : null} />
+          <ForecastTile label="In stock" value={fmtQty(totalQty)} unit={unit} sub={`Across ${pv.lots.length} lot${pv.lots.length === 1 ? "" : "s"} in stock${pv.packText ? ` · ${pv.packText}` : ""}`} tone={totalQty <= 0 ? "red" : null} />
           <ForecastTile label="Daily use (30 days)" value={fmtQty(avgDaily)} unit={`${unit}/day`} sub={`${fmtQty(consumed30)} ${unit} used in the last 30 days`} />
-          <ForecastTile label="Days left" value={daysLeft === null ? "—" : daysLeft} unit={daysLeft === null ? "" : daysLeft === 1 ? "day" : "days"} sub={daysLeft === null ? "No usage logged in the last 30 days" : "At the current usage rate"} tone={daysTone} />
+          <ForecastTile label="Days left" value={daysLeft === null ? "—" : daysLeft} unit={daysLeft === null ? "" : daysLeft === 1 ? "day" : "days"} sub={daysLeft === null ? "No usage logged in the last 30 days" : lowEvidence ? lowEvidenceText : "At the current usage rate"} tone={daysTone} />
           <ForecastTile
             label="Run-out date"
             value={runOut === null ? "—" : daysLeft === 0 ? "Now" : fmtDay(runOut)}
-            sub={runOut === null ? "Needs recent usage to estimate" : daysLeft === 0 ? "Nothing left in stock" : daysLeft > 365 ? "Over a year away, if usage stays the same" : "If usage stays at this rate"}
+            sub={runOut === null ? "Needs recent usage to estimate" : daysLeft === 0 ? "Nothing left in stock" : lowEvidence ? `${lowEvidenceText} — treat as a rough estimate` : daysLeft > 365 ? "Over a year away, if usage stays the same" : "If usage stays at this rate"}
             tone={daysTone}
           />
         </div>
@@ -2494,12 +2534,13 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           </div>
         )}
         <div style={{ fontSize: 12, color: THEME.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
-          <span style={{ fontWeight: 600, color: THEME.text }}>Evidence: </span>{forecastEvidenceText}
+          <span style={{ fontWeight: 600, color: THEME.text }}>Evidence: </span>{forecastEvidenceText(evidence)}
         </div>
-        {(relatedText || unitsMixed) && (
+        {pv === partViews[0] && (relatedText || unitsMixed || group.otherUnitUsage.length > 0) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: THEME.textMuted, lineHeight: 1.5 }}>
             {relatedText && <div><span style={{ fontWeight: 600, color: THEME.text }}>Also recorded separately: </span>{relatedText}</div>}
-            {unitsMixed && <div><span style={{ fontWeight: 600, color: THEME.text }}>Units: </span>In-stock lots use different units ({unitsMixed.units.join(", ")}); the stock total adds them as recorded.</div>}
+            {unitsMixed && <div><span style={{ fontWeight: 600, color: THEME.text }}>Units: </span>In-stock lots use different units ({unitsMixed.units.join(", ")}). Each unit has its own stock, usage and forecast below; they are never added together or converted.</div>}
+            {group.otherUnitUsage.length > 0 && <div><span style={{ fontWeight: 600, color: THEME.text }}>Usage in another unit: </span>{group.otherUnitUsage.map((o) => `${fmtQty(o.recentUsed)} ${unitText(o.unit)}`).join(", ")} logged in the last 30 days on lots recorded in {group.otherUnitUsage.length === 1 ? "a unit" : "units"} with no stock now. Not included in the forecast, because different units aren't converted.</div>}
           </div>
         )}
 
@@ -2521,20 +2562,20 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
 
         {showHow && (
           <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
-            <HowRow label={`Status: ${STATUS_META[group.status]?.label || ""}`}>
+            {pv === partViews[0] && <HowRow label={`Status: ${STATUS_META[group.status]?.label || ""}`}>
               <div>Critical if any lot in stock is expired or empty; Watch if stock is low (and not snoozed) or a lot expires within {why.warnDays} days; otherwise Stable.</div>
               {why.reasons.length === 0 ? (
                 <div>No lot is expired, empty or expiring within {why.warnDays} days, and stock isn't low → Stable.</div>
               ) : (
                 why.reasons.map((r, i) => <div key={i}>· {reasonText(r)}</div>)
               )}
-            </HowRow>
+            </HowRow>}
             <HowRow label="In stock">
-              {group.items.map((it, i) => (
+              {pv.lots.map((it, i) => (
                 <span key={it.id}>{i > 0 && " + "}Lot <span style={{ fontFamily: MONO }}>{it.lot_number}</span>: {fmtQty(it.current_quantity)}</span>
               ))}
               {" = "}<b style={{ color: THEME.text }}>{fmtQty(totalQty)} {unit}</b>
-              <div>Only lots still in stock are counted. Lots that ran out, were discarded or were removed are not.</div>
+              <div>Only lots still in stock are counted. Lots that ran out, were discarded or were removed are not.{mixed ? ` Only lots recorded in ${unit} are added here.` : ""}</div>
             </HowRow>
             <HowRow label="Usage, last 30 days">
               <div>{fmtDay(breakdown.windowStart)} – {fmtDay(breakdown.windowEnd)}: <b style={{ color: THEME.text }}>{fmtQty(consumed30)} {unit}</b> from {breakdown.logCount} usage log{breakdown.logCount === 1 ? "" : "s"}</div>
@@ -2567,7 +2608,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
               )}
             </HowRow>
             <HowRow label="Low stock">
-              Low stock when stock is above 0 and at or below the threshold. The threshold comes from the next lot to use{nextLot ? <> (lot <span style={{ fontFamily: MONO }}>{nextLot.lot_number}</span>: {fmtQty(threshold)} {unit})</> : null}. Now: {fmtQty(totalQty)} {unit} → <b style={{ color: THEME.text }}>{totalQty <= 0 ? "out of stock" : group.lowStockRaw ? "low stock" : "not low"}</b>
+              Low stock when stock is above 0 and at or below the threshold. The threshold comes from the next lot to use{mixed ? ` in ${unit}` : ""}{nextLot ? <> (lot <span style={{ fontFamily: MONO }}>{nextLot.lot_number}</span>: {fmtQty(threshold)} {unit})</> : null}. Now: {fmtQty(totalQty)} {unit} → <b style={{ color: THEME.text }}>{totalQty <= 0 ? "out of stock" : pv.lowStockRaw ? "low stock" : "not low"}</b>
               {group.snoozedUntil ? <>, alert snoozed until {group.snoozedUntil}</> : null}.
             </HowRow>
             <HowRow label="Reorder">
@@ -2583,6 +2624,8 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           </div>
         )}
       </section>
+        );
+      })}
 
       {/* ── Lots: in stock (FEFO) | all lots (history) ──────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
@@ -2601,7 +2644,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           ))}
         </div>
       </div>
-      {lotView === "in_stock" && outlook.length > 0 && (
+      {lotView === "in_stock" && allOutlook.length > 0 && (
         <div style={{ marginBottom: 10 }}>
           <button onClick={() => setShowExpiryHow((v) => !v)} aria-expanded={showExpiryHow} style={{ background: "none", border: "none", padding: 0, color: THEME.primary, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
             <ChevronRight size={14} style={{ transform: showExpiryHow ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
@@ -2612,11 +2655,12 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
               <HowRow label="Assumption">
                 Lots are used one at a time, earliest expiry first (FEFO), at the current usage rate. The expiry date itself counts as a usable day. Expired lots are left out. This is an estimate from recent usage, not a prediction of what will happen.
               </HowRow>
-              <HowRow label="Usage rate">
+              {partViews.filter((pv) => pv.outlook.length > 0).map(({ key: pk, unit, avgDaily, outlook }) => (<React.Fragment key={pk}>
+              <HowRow label={mixed ? `Usage rate (${unit})` : "Usage rate"}>
                 {avgDaily > 0 ? (
                   <><b style={{ color: THEME.text }}>{fmtQty(avgDaily, 3)} {unit}/day</b> — from {evidenceText(outlook[0].evidence)} (the same rate as the forecast above).</>
                 ) : (
-                  <>No usage in the last 30 days, so no lot can be estimated.</>
+                  <>No usage{mixed ? ` in ${unit}` : ""} in the last 30 days, so no lot can be estimated.</>
                 )}
               </HowRow>
               {outlook.map((o) => (
@@ -2634,6 +2678,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                   )}
                 </HowRow>
               ))}
+              </React.Fragment>))}
             </div>
           )}
         </div>
@@ -2652,7 +2697,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                 <div style={{ flex: 1, minWidth: 90, fontFamily: MONO, fontSize: 13, color: THEME.text }}>Lot {it.lot_number}</div>
                 <div style={{ textAlign: "right", fontSize: 13, color: THEME.text, fontWeight: 600 }}>
                   {(() => {
-                    const q = formatCartonQty(it.current_quantity, it.units_per_carton, it.unit);
+                    const q = lotQtyView(it);
                     return <>{q.main}{q.sub && <div style={{ fontSize: 10.5, color: THEME.textMuted, fontWeight: 400 }}>{q.sub}</div>}</>;
                   })()}
                 </div>
@@ -2667,7 +2712,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                 {can("delete") && <button onClick={() => onDeleteReagent(it.id)} title="Delete this lot" style={{ ...iconBtn, color: "var(--critical)" }}><Trash2 size={14} /></button>}
               </div>
               {(() => {
-                const line = outlookLine(outlookByLot[it.id]);
+                const line = outlookLine(outlookByLot[it.id], unitText(it.unit));
                 if (!line) return null;
                 return (
                   <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: line.tone === "warning" ? "var(--warning)" : THEME.textMuted, fontWeight: line.tone === "warning" ? 600 : 400 }}>
@@ -2718,14 +2763,14 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                   )}
                   {endedText && <LotFact label="Ended">{endedText}</LotFact>}
                   <LotFact label="Expiry">{e.expiryDate ? fmtDay(e.expiryDate) : <span style={{ color: THEME.textMuted }}>No expiry</span>}</LotFact>
-                  <LotFact label="Received qty">{fmtQty(e.received)} {unit}</LotFact>
+                  <LotFact label="Received qty">{fmtQty(e.received)} {unitText(e.unit)}</LotFact>
                   <LotFact
                     label="Logged usage"
                     note={e.usage.corrections.count > 0 ? `${fmtQty(e.usage.normal.amount)} from ${e.usage.normal.count} normal log${e.usage.normal.count === 1 ? "" : "s"} · ${fmtQty(e.usage.corrections.amount)} from ${e.usage.corrections.count} stock-count correction${e.usage.corrections.count === 1 ? "" : "s"}` : e.usage.normal.count > 0 ? `${e.usage.normal.count} log${e.usage.normal.count === 1 ? "" : "s"}` : null}
                   >
-                    {fmtQty(e.usage.total)} {unit}
+                    {fmtQty(e.usage.total)} {unitText(e.unit)}
                   </LotFact>
-                  <LotFact label={e.active ? "Remaining" : "Left when it ended"}>{fmtQty(e.remaining)} {unit}</LotFact>
+                  <LotFact label={e.active ? "Remaining" : "Left when it ended"}>{fmtQty(e.remaining)} {unitText(e.unit)}</LotFact>
                   {e.edited && <LotFact label="Last edited">{fmtTimestampDay(e.edited.at) || "—"} · {e.edited.by}</LotFact>}
                 </div>
                 {(e.replaced.length > 0 || e.replacedBy.length > 0) && (
@@ -2741,7 +2786,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
                 {e.unexplained !== 0 && (
                   <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.5 }}>
                     <div style={{ color: THEME.text, fontWeight: 600 }}>
-                      Stock change not explained by usage logs: {e.unexplained > 0 ? "+" : "−"}{fmtQty(Math.abs(e.unexplained))} {unit}
+                      Stock change not explained by usage logs: {e.unexplained > 0 ? "+" : "−"}{fmtQty(Math.abs(e.unexplained))} {unitText(e.unit)}
                     </div>
                     <div style={{ color: THEME.textMuted }}>
                       Remaining {fmtQty(e.remaining)} − (received {fmtQty(e.received)} − logged usage {fmtQty(e.usage.total)}). This difference is derived from received quantity, logged usage, and remaining quantity. The exact cause is not determined here.
@@ -2816,7 +2861,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
               <span style={{ fontFamily: MONO, fontSize: 12, color: THEME.text }}>{lotLabel(lot.id, lot.lot_number)}</span>
               {!lotActive && <MutedTag>ended</MutedTag>}
             </div>
-            <div style={{ flex: 1, minWidth: 70, color: THEME.text, fontWeight: 600 }}>−{l.amount} {group.unit}</div>
+            <div style={{ flex: 1, minWidth: 70, color: THEME.text, fontWeight: 600 }}>−{l.amount} {unitText(lot.unit)}</div>
             <div style={{ color: THEME.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
               {isCorrection ? <span title={`${l.used_by} — change it from Stock count (Edit dates)`}><MutedTag>Stock-count correction</MutedTag></span> : <><Users size={12} /> {l.used_by}</>}
             </div>

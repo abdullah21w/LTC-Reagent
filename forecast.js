@@ -17,6 +17,8 @@
 // Dates are compared as plain "YYYY-MM-DD" strings, the same format the
 // consumption_logs.date column and the app's todayISO() use.
 
+import { normalizeUnit, parsePackaging, resolvePackUnit, splitIntoBoxes, unitLabel } from "./units";
+
 export const FORECAST_WINDOW_DAYS = 30;
 
 export function groupKeyOf(lot) {
@@ -51,6 +53,184 @@ export function recentUsageByGroup(reagents, logs, todayISO) {
   return usage;
 }
 
+// ─── Units (U2b) ────────────────────────────────────────────────────────────
+// Quantities are only ever added within one base unit (units.js normalizeUnit:
+// "box", "BOX" and "boxes" are one unit; box and Piece never are). A usage log
+// counts in the unit of the lot it was logged on. A lot whose unit is blank
+// can't be placed in any unit: it gets its own UNKNOWN_UNIT part ("unit not
+// recorded") instead of being merged into another unit or dropped.
+export const UNKNOWN_UNIT = "";
+export function lotUnitKey(lot) {
+  return lot ? normalizeUnit(lot.unit).key : UNKNOWN_UNIT;
+}
+
+// Same rules as recentUsageByGroup, split by unit:
+// { [groupKey]: { [unitKey]: amount } }.
+export function recentUsageByGroupUnit(reagents, logs, todayISO) {
+  const windowStart = forecastWindowStart(todayISO);
+  const lotById = {};
+  for (const r of reagents || []) lotById[r.id] = r;
+  const usage = {};
+  for (const l of logs || []) {
+    if (l.deleted) continue;
+    if (!l.date || l.date < windowStart || l.date > todayISO) continue;
+    const lot = lotById[l.reagent_id];
+    if (!lot) continue;
+    const g = (usage[groupKeyOf(lot)] ||= {});
+    const k = lotUnitKey(lot);
+    g[k] = (g[k] || 0) + Number(l.amount || 0);
+  }
+  return usage;
+}
+
+// A pack equivalent for a set of lots of ONE base unit — only when every lot
+// has the same valid box size and the same outer label; otherwise null (lots
+// that differ, or any lot without packaging, never get a shared pack).
+// → { perBox, packUnit, verified } — verified only for a label saved on the
+//   lot (units.js "lot_setting"); the legacy inferred name is never verified.
+export function packEquivalent(lots) {
+  const list = lots || [];
+  if (list.length === 0) return null;
+  let perBox = null, label = null;
+  for (const l of list) {
+    const p = parsePackaging(l.units_per_carton);
+    if (!p.packaged) return null;
+    const r = resolvePackUnit(l);
+    const lab = `${r.source}:${r.singular}`;
+    if (perBox === null) { perBox = p.perBox; label = lab; }
+    else if (p.perBox !== perBox || lab !== label) return null;
+  }
+  const packUnit = resolvePackUnit(list[0]);
+  return { perBox, packUnit, verified: packUnit.source === "lot_setting" };
+}
+
+// Presentation only — never a quantity. With a saved label: "2 boxes + 3
+// bottles". Without one (legacy lots), neutral wording that names only the
+// recorded box size: "2 × 6-bottle packs + 3 bottles". null when there is no
+// pack equivalent, the box size is 1, or less than one full pack is left.
+export function packEquivalentText(qty, pack, unit) {
+  if (!pack || pack.perBox <= 1) return null;
+  const s = splitIntoBoxes(qty, pack.perBox);
+  if (!s || s.fullBoxes === 0) return null;
+  const loose = s.loose > 0 ? ` + ${round2(s.loose)} ${unitLabel(unit, s.loose)}` : "";
+  if (pack.verified) return `${s.fullBoxes} ${s.fullBoxes === 1 ? pack.packUnit.singular : pack.packUnit.plural}${loose}`;
+  return `${s.fullBoxes} × ${pack.perBox}-${unitLabel(unit, 1)} pack${s.fullBoxes === 1 ? "" : "s"}${loose}`;
+}
+
+// Low evidence (shared by every screen): a forecast that exists (usage in the
+// window) but rests only on stock-count corrections — estimates made at a
+// count — or on a single usage log. `evidence` is a usageEvidence() result.
+export const LOW_EVIDENCE_CATEGORIES = ["corrections_only", "single_log"];
+export function isLowEvidence(evidence) {
+  return !!evidence && LOW_EVIDENCE_CATEGORIES.includes(evidence.category);
+}
+export function lowEvidenceLabel(evidence) {
+  if (!isLowEvidence(evidence)) return null;
+  return evidence.category === "corrections_only" ? "Low evidence: based only on stock-count corrections" : "Low evidence: based on a single usage log";
+}
+
+// One part per base unit of a group. `items` = the group's active lots in
+// their stored order, `sorted` = the same lots in FEFO order, `usage` =
+// recentUsageByGroupUnit(...)[groupKey]. Parts are listed for every unit with
+// stock and for every unit that only has recent usage (lots recorded in a
+// unit that is no longer in stock); inStock tells them apart. Each part carries
+// its usage evidence (usageEvidence for that unit) and lowEvidence, computed
+// once here so every screen shows the same judgement.
+function unitParts(items, sorted, usage, ctx) {
+  const keys = [];
+  for (const r of sorted) { const k = lotUnitKey(r); if (!keys.includes(k)) keys.push(k); }
+  for (const k of Object.keys(usage || {})) if (!keys.includes(k)) keys.push(k);
+  return keys.map((k) => {
+    const mine = items.filter((r) => lotUnitKey(r) === k);
+    const lots = sorted.filter((r) => lotUnitKey(r) === k);
+    const totalQty = mine.reduce((s, i) => s + i.current_quantity, 0);
+    const totalReceived = mine.reduce((s, i) => s + i.quantity_received, 0);
+    const recentUsed = (usage || {})[k] || 0;
+    const dailyRate = recentUsed / 30;
+    const inStock = lots.length > 0;
+    const threshold = inStock ? lots[0].low_stock_threshold : null;
+    const predictedDaysLeft = inStock && dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
+    const evidence = usageEvidence(ctx.groupKey, ctx.reagents, ctx.logs, ctx.today, k);
+    return {
+      key: k,
+      unit: k === UNKNOWN_UNIT ? "(unit not recorded)" : inStock ? mine[0].unit : normalizeUnit(k).label || k,
+      inStock,
+      lots,
+      totalQty: inStock ? totalQty : null,
+      totalReceived: inStock ? totalReceived : null,
+      recentUsed,
+      dailyRate,
+      predictedDaysLeft,
+      evidence,
+      lowEvidence: predictedDaysLeft !== null && isLowEvidence(evidence),
+      threshold,
+      lowStockRaw: inStock && totalQty > 0 && totalQty <= threshold,
+      pack: inStock ? packEquivalent(lots) : null,
+    };
+  });
+}
+
+// The reagent groups (name + device) the whole app shows — moved here from
+// App.jsx unchanged in identity, status, snoozes and lot order. `env` brings
+// App's own helpers so the rules stay exactly App's:
+//   { snoozes, warnDays, today, compareLots, daysBetween, hasInspectionIssue, isExpiringSoonItem }
+//
+// Single-unit groups keep every previous field and value: totalQty, unit,
+// recentUsed, dailyRate, predictedDaysLeft, lowStockRaw … The one deliberate
+// change: recent usage now only counts logs on lots of that same unit (logs on
+// lots recorded in another unit are listed in otherUnitUsage instead).
+// Mixed-unit groups (in-stock lots in more than one unit) get NO group total:
+// totalQty, totalReceived, unit, recentUsed and dailyRate are null, and the
+// figures live in `parts` (one per unit). Low stock is checked per part with
+// that part's next-to-use lot threshold; predictedDaysLeft is the earliest
+// part's (forecastPart says which), so run-out ranking still works.
+export function buildGroups(reagents, logs, env) {
+  if (!reagents) return [];
+  const { snoozes, warnDays, today, compareLots, daysBetween, hasInspectionIssue, isExpiringSoonItem } = env;
+  const active = reagents.filter((r) => !r.deleted);
+  const map = {};
+  for (const r of active) {
+    const key = groupKeyOf(r);
+    if (!map[key]) map[key] = [];
+    map[key].push(r);
+  }
+  // Usage over the last 30 days counts logs on ALL of the group's lots
+  // (including ones that have since run out or been removed); stock counts
+  // active lots only.
+  const usage = recentUsageByGroupUnit(reagents, logs, today);
+  return Object.entries(map).map(([key, items]) => {
+    const sorted = [...items].sort(compareLots);
+    const anyExpiredOrEmpty = items.some((i) => (i.expiry_date && daysBetween(i.expiry_date, today) < 0) || i.current_quantity <= 0);
+    const flagged = items.some(hasInspectionIssue);
+    const allParts = unitParts(items, sorted, usage[key], { groupKey: key, reagents, logs, today });
+    const parts = allParts.filter((p) => p.inStock);
+    const otherUnitUsage = allParts.filter((p) => !p.inStock && p.recentUsed > 0).map((p) => ({ key: p.key, unit: p.unit, recentUsed: p.recentUsed }));
+    const mixedUnits = parts.length > 1;
+    const lowStockRaw = parts.some((p) => p.lowStockRaw);
+    const activeSnooze = (snoozes || []).find((s) => s.reagent_name === items[0].name && s.device === (items[0].device || "") && s.snoozed_until >= today);
+    const lowStock = lowStockRaw && !activeSnooze;
+    const snoozedUntil = activeSnooze ? activeSnooze.snoozed_until : null;
+    const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
+    const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
+
+    const single = mixedUnits ? null : parts[0];
+    const ranked = parts.filter((p) => p.predictedDaysLeft !== null).sort((a, b) => a.predictedDaysLeft - b.predictedDaysLeft);
+    const forecastPart = single || ranked[0] || null;
+    return {
+      key, name: items[0].name, device: items[0].device || "", items: sorted, fefo: sorted[0],
+      totalQty: single ? single.totalQty : null,
+      totalReceived: single ? single.totalReceived : null,
+      status: worstStatus, department: items[0].department,
+      unit: single ? items[0].unit : null,
+      flagged, lowStock, lowStockRaw, snoozedUntil, expiringSoon,
+      recentUsed: single ? single.recentUsed : null,
+      dailyRate: single ? single.dailyRate : null,
+      predictedDaysLeft: forecastPart ? forecastPart.predictedDaysLeft : null,
+      mixedUnits, parts, otherUnitUsage, forecastPart,
+    };
+  });
+}
+
 // The date the current stock is projected to run out: today + the group's
 // predictedDaysLeft (calendar days). null when there's no forecast (no usage
 // in the window).
@@ -66,10 +246,11 @@ export function runOutDate(todayISO, predictedDaysLeft) {
 //   ended        — logs on lots that have since run out / been discarded / removed
 //   stockCount   — logs created by a stock-count correction (any lot); this is
 //                  an overlapping share of the total, not a third bucket
-export function usageBreakdown(groupKey, reagents, logs, todayISO) {
+// Optional `unitKey`: only logs on the group's lots of that unit (U2b).
+export function usageBreakdown(groupKey, reagents, logs, todayISO, unitKey) {
   const windowStart = forecastWindowStart(todayISO);
   const lotById = {};
-  for (const r of reagents || []) if (groupKeyOf(r) === groupKey) lotById[r.id] = r;
+  for (const r of reagents || []) if (groupKeyOf(r) === groupKey && (unitKey === undefined || lotUnitKey(r) === unitKey)) lotById[r.id] = r;
 
   const out = {
     windowStart, windowEnd: todayISO,
@@ -200,6 +381,7 @@ export function lotHistory(groupKey, reagents, logs, todayISO) {
       receivedDate: lot.date_added || null,
       receivedBy: lot.added_by || null,
       expiryDate: lot.expiry_date || null,
+      unit: lot.unit,
       received,
       remaining,
       usage: {
@@ -342,8 +524,9 @@ export function expiryOutlook(fefoLots, dailyRate, todayISO, evidence) {
 // it does not define status; that memo stays authoritative and a test checks
 // both agree for every reagent group:
 //   red    if any active lot is expired (daysToExpiry < 0) or empty (qty ≤ 0)
-//   yellow else if low stock (0 < total ≤ threshold of the FEFO lot, and the
-//          low-stock alert isn't snoozed) or any lot expires within warnDays
+//   yellow else if low stock (0 < total ≤ threshold of the FEFO lot, per
+//          unit — U2b; and the low-stock alert isn't snoozed) or any lot
+//          expires within warnDays
 //   green  otherwise
 // `items` = group.items (active lots, FEFO order); `isSnoozed` = an active
 // low-stock snooze exists (App: group.snoozedUntil !== null).
@@ -357,11 +540,22 @@ export function statusReasons(items, warnDays, todayISO, isSnoozed, snoozedUntil
   for (const i of lots) {
     if (i.current_quantity <= 0) reasons.push({ kind: "empty", lotId: i.id, lotNumber: i.lot_number });
   }
-  const totalQty = lots.reduce((s, i) => s + i.current_quantity, 0);
-  const threshold = lots[0] ? lots[0].low_stock_threshold : null;
-  const lowStockRaw = lots.length > 0 && totalQty > 0 && totalQty <= threshold;
-  if (lowStockRaw && !isSnoozed) reasons.push({ kind: "low_stock", totalQty, threshold, lotNumber: lots[0].lot_number });
-  if (lowStockRaw && isSnoozed) reasons.push({ kind: "low_stock_snoozed", totalQty, threshold, snoozedUntil });
+  // Low stock per unit (U2b): each unit's lots against the threshold of that
+  // unit's next-to-use lot — quantities in different units are never added.
+  const byUnit = new Map();
+  for (const i of lots) {
+    const k = lotUnitKey(i);
+    if (!byUnit.has(k)) byUnit.set(k, []);
+    byUnit.get(k).push(i);
+  }
+  for (const ls of byUnit.values()) {
+    const totalQty = ls.reduce((s, i) => s + i.current_quantity, 0);
+    const threshold = ls[0].low_stock_threshold;
+    const lowStockRaw = totalQty > 0 && totalQty <= threshold;
+    const unit = ls[0].unit;
+    if (lowStockRaw && !isSnoozed) reasons.push({ kind: "low_stock", totalQty, threshold, unit, lotNumber: ls[0].lot_number });
+    if (lowStockRaw && isSnoozed) reasons.push({ kind: "low_stock_snoozed", totalQty, threshold, unit, snoozedUntil });
+  }
   for (const i of lots) {
     if (!i.expiry_date) continue;
     const d = daysBetweenISO(i.expiry_date, todayISO);
@@ -391,9 +585,9 @@ export function expiryExceptions(outlook) {
 //           "corrections_only" — every log in the window is a stock-count correction
 //           "single_log"       — exactly one (normal) log in the window
 //           "multiple_logs"    — two or more logs in the window
-export function usageEvidence(groupKey, reagents, logs, todayISO) {
-  const b = usageBreakdown(groupKey, reagents, logs, todayISO);
-  const lotIds = new Set((reagents || []).filter((r) => groupKeyOf(r) === groupKey).map((r) => r.id));
+export function usageEvidence(groupKey, reagents, logs, todayISO, unitKey) {
+  const b = usageBreakdown(groupKey, reagents, logs, todayISO, unitKey);
+  const lotIds = new Set((reagents || []).filter((r) => groupKeyOf(r) === groupKey && (unitKey === undefined || lotUnitKey(r) === unitKey)).map((r) => r.id));
   let lastLogDate = null, lastNormalLogDate = null;
   for (const l of logs || []) {
     if (l.deleted || !l.date || l.date > todayISO || !lotIds.has(l.reagent_id)) continue;
@@ -535,10 +729,11 @@ export function stockCountHistory(groupKey, reagents, countLines, logs) {
 // forecast should be read. Nothing here merges, converts or recalculates
 // anything: grouping (groupKeyOf) and every forecast value stay as they are.
 
-// Stored units compared with trim + lowercase; the display keeps the first
-// stored spelling seen. Quantities are kept per unit and never added across
-// units (box, Piece, bottle … are never assumed equivalent).
-const normUnit = (u) => String(u ?? "").trim().toLowerCase();
+// Stored units compared by units.js normalizeUnit ("box" = "BOX" = "boxes");
+// the display keeps the first stored spelling seen. Quantities are kept per
+// unit and never added across units (box, Piece, bottle … are never assumed
+// equivalent).
+const normUnit = (u) => normalizeUnit(u).key;
 function quantitiesByUnit(lots) {
   const byUnit = new Map();
   for (const r of lots) {

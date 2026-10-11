@@ -11,6 +11,7 @@
 
 import React from "react";
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from "@react-pdf/renderer";
+import { normalizeUnit } from "../units.js";
 
 const h = React.createElement;
 
@@ -127,16 +128,18 @@ export async function buildMonthlyReport({ SUPABASE_URL, SUPABASE_KEY, year, mon
   const reagentById = {};
   reagents.forEach((r) => { reagentById[r.id] = r; });
 
+  // Totals per reagent name AND unit (units.js normalizeUnit): amounts in
+  // different units are never added. Logs whose lot row no longer exists keep
+  // their own "unit unknown" row instead of being dropped or merged.
   const mostUsedMap = {};
   logsThisMonth.forEach((l) => {
     const r = reagentById[l.reagent_id];
-    const name = r ? r.name : "Unknown";
-    const unit = r ? r.unit : "";
-    if (!mostUsedMap[name]) mostUsedMap[name] = { qty: 0, unit };
-    mostUsedMap[name].qty += Number(l.amount || 0);
+    const key = r ? `${r.name}::${normalizeUnit(r.unit).key}` : "::unknown";
+    if (!mostUsedMap[key]) mostUsedMap[key] = { name: r ? r.name : "Unknown (lot no longer on record)", unit: r ? String(r.unit ?? "").trim() : "unit unknown", qty: 0 };
+    mostUsedMap[key].qty += Number(l.amount || 0);
   });
-  const mostUsed = Object.entries(mostUsedMap)
-    .map(([name, v]) => ({ name, qty: v.qty, unit: v.unit }))
+  const mostUsed = Object.values(mostUsedMap)
+    .map((v) => ({ name: v.name, qty: Math.round(v.qty * 100) / 100, unit: v.unit }))
     .sort((a, b) => b.qty - a.qty)
     .slice(0, 10);
 
