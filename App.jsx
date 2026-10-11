@@ -11,6 +11,7 @@ import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
+import { planLotEdit, describeInBoxes } from "./lotEdit";
 import { recentUsageByGroup, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, usageEvidence, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
@@ -89,9 +90,10 @@ function compareLots(a, b) {
 }
 
 // When a lot has carton packaging enabled, current_quantity/quantity_received
-// are stored in boxes (the fine-grained unit actually decremented by Log use).
-// This turns that raw box count into a { main, sub } display: cartons as the
-// headline number, total boxes remaining as the smaller supporting text.
+// are stored in the lot's `unit` — the unit inside each box, the one Log use
+// subtracts — never in boxes. This turns that stored amount into a { main, sub }
+// display: whole boxes as the headline number, the stored amount as the
+// smaller supporting text.
 // Lots without packaging return { main: "<qty> <unit>", sub: null } unchanged.
 function formatCartonQty(qty, unitsPerCarton, unit) {
   if (!unitsPerCarton || unitsPerCarton <= 0) return { main: `${qty} ${unit}`, sub: null };
@@ -3459,39 +3461,55 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
 function EditReagentModal({ reagent, onClose, onSave }) {
   const [form, setForm] = useState({ ...reagent });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const wasPackaged = !!reagent.units_per_carton;
+  const wasPackaged = reagent.units_per_carton !== null && reagent.units_per_carton !== undefined;
   const [packagingEnabled, setPackagingEnabled] = useState(wasPackaged);
-  const [unitsPerCarton, setUnitsPerCarton] = useState(reagent.units_per_carton || "");
+  const [unitsPerCarton, setUnitsPerCarton] = useState(wasPackaged ? String(reagent.units_per_carton) : "");
+  const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Usage logs and Stock Count lines recorded against this lot (see lotEdit.js):
+  // null until loaded, or if the lookup fails — then changes of meaning stay blocked.
+  const [history, setHistory] = useState({ logs: null, countLines: null, loaded: false });
+  useEffect(() => {
+    let live = true;
+    Promise.all([
+      supabase.from("consumption_logs").select("id", { count: "exact", head: true }).eq("reagent_id", reagent.id),
+      supabase.from("inventory_count_items").select("id", { count: "exact", head: true }).eq("reagent_id", reagent.id),
+    ]).then(([l, c]) => {
+      if (live) setHistory({ logs: l.error ? null : l.count ?? null, countLines: c.error ? null : c.count ?? null, loaded: true });
+    }).catch(() => { if (live) setHistory({ logs: null, countLines: null, loaded: true }); });
+    return () => { live = false; };
+  }, [reagent.id]);
 
-  function submit() {
-    if (saving) return;
+  const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, history, confirmed });
+  const unit = (form.unit || "").trim() || "units";
+  const perBox = packagingEnabled ? Number(unitsPerCarton) : null;
+  const inBoxes = (v) => (perBox ? describeInBoxes(v, perBox, unit) : null);
+  // Any edit to what the confirmation describes asks for it again.
+  const confirmKey = plan.confirmations.join("|");
+  useEffect(() => { setConfirmed(false); }, [confirmKey]);
+
+  async function submit() {
+    if (saving || plan.status !== "ok") return;
     setSaving(true);
-    const payload = { ...form, quantity_received: Number(form.quantity_received), current_quantity: Number(form.current_quantity), low_stock_threshold: Number(form.low_stock_threshold) };
-    if (packagingEnabled && unitsPerCarton) {
-      const upc = Number(unitsPerCarton);
-      if (!wasPackaged) {
-        // Newly enabling packaging: the existing numbers were plain units —
-        // convert them once into the new carton-based box count.
-        payload.quantity_received = payload.quantity_received * upc;
-        payload.current_quantity = payload.current_quantity * upc;
-      }
-      payload.units_per_carton = upc;
-    } else {
-      payload.units_per_carton = null;
-    }
-    onSave(payload);
+    await onSave(plan.payload);
+    setSaving(false);
   }
 
+  const hint = { fontSize: 11.5, color: "#0F7173", marginTop: 4, fontWeight: 400 };
   return (
     <Modal title={`Edit lot ${reagent.lot_number}`} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <label style={labelStyle}>Lot number<input style={inputStyle} value={form.lot_number} onChange={set("lot_number")} /></label>
         <label style={labelStyle}>Unit<input style={inputStyle} value={form.unit} onChange={set("unit")} /></label>
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Quantity received{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} /></label>
-          <label style={{ ...labelStyle, flex: 1 }}>Current quantity{packagingEnabled ? " (in boxes)" : ""}<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Quantity received ({unit})<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} />
+            {inBoxes(form.quantity_received) && <div style={hint}>= {inBoxes(form.quantity_received)}</div>}
+          </label>
+          <label style={{ ...labelStyle, flex: 1 }}>Current quantity ({unit})<input type="number" style={inputStyle} value={form.current_quantity} onChange={set("current_quantity")} />
+            {inBoxes(form.current_quantity) && <div style={hint}>= {inBoxes(form.current_quantity)}</div>}
+          </label>
         </div>
+        {packagingEnabled && <div style={{ fontSize: 11.5, color: "#516361", marginTop: -6 }}>Quantities are stored in {unit} (the unit inside each box), never in boxes.</div>}
 
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
           <input type="checkbox" checked={packagingEnabled} onChange={(e) => setPackagingEnabled(e.target.checked)} />
@@ -3500,18 +3518,35 @@ function EditReagentModal({ reagent, onClose, onSave }) {
         {packagingEnabled && (
           <label style={labelStyle}>{form.unit || "Units"} per box<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
         )}
-        {packagingEnabled && !wasPackaged && unitsPerCarton && (
-          <div style={{ fontSize: 11.5, color: "#0F7173" }}>
-            Quantities above will be converted once: {form.quantity_received} → {Number(form.quantity_received) * Number(unitsPerCarton)} {form.unit}, {form.current_quantity} → {Number(form.current_quantity) * Number(unitsPerCarton)} {form.unit}.
-          </div>
-        )}
 
         <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
-        <label style={labelStyle}>Low stock alert below<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
+        <label style={labelStyle}>Low stock alert below ({unit})<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
+
+        {plan.status === "invalid" && (
+          <div style={{ background: "#FDECEA", border: "1px solid #F5C2BB", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#A33A26" }}>
+            {plan.errors.map((e) => <div key={e}>{e}</div>)}
+          </div>
+        )}
+        {plan.status === "blocked" && (
+          <div style={{ background: "#FDECEA", border: "1px solid #F5C2BB", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#A33A26" }}>
+            {!history.loaded && <div>Checking this lot's history…</div>}
+            {history.loaded && plan.blocks.map((b) => <div key={b} style={{ marginBottom: 4 }}>{b}</div>)}
+            {history.loaded && <div>Undo that change to save the other edits. A lot recorded differently should be received as a new lot.</div>}
+          </div>
+        )}
+        {plan.confirmations.length > 0 && (
+          <div style={{ background: "#FFF7ED", border: "1px solid #FDBA74", borderRadius: 7, padding: "10px 12px" }}>
+            {plan.confirmations.map((c) => <div key={c} style={{ fontSize: 12.5, color: "#7C3E00", marginBottom: 6 }}>{c}</div>)}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#7C3E00", cursor: "pointer" }}>
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+              I confirm the quantities above are in {unit}
+            </label>
+          </div>
+        )}
         <button
-          disabled={saving}
+          disabled={saving || plan.status !== "ok"}
           onClick={submit}
-          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}
+          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving || plan.status !== "ok" ? 0.5 : 1 }}
         >{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
