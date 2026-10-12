@@ -16,6 +16,16 @@
 // Count lines (or while that can't be confirmed), and otherwise needs an
 // explicit confirmation. Correcting the packaging of a lot with history is
 // left to a separate, audited workflow (not built yet).
+//
+// The package name (pack_unit: box, carton, kit …) follows the same rule: it
+// says what the stored amounts are packed in, so it can only be set or changed
+// on a lot without history (and never just added to a lot with history — that
+// is the database's packaging_locked guard too). A new name must be 1–40
+// characters, a package rather than a measurement, different from the unit
+// inside it, and needs a whole-number box size. Old values that predate these
+// rules are left as they are and don't stop unrelated edits.
+
+import { unitLabel as countLabel, validatePackUnit, PACK_UNIT_MAX_LENGTH } from "./units";
 
 export const normUnit = (u) => String(u ?? "").trim().toLowerCase();
 
@@ -24,15 +34,28 @@ const num = (v) => (isBlank(v) ? NaN : Number(v));
 const fmt = (n) => String(Math.round(Number(n) * 100) / 100);
 const unitLabel = (u) => String(u ?? "").trim() || "units";
 
-// "1 full box + 3 bottle" for a quantity in units with `perBox` units per box.
-export function describeInBoxes(qty, perBox, unit) {
+// Presentation only, never stored. A quantity in units with `perBox` units per
+// package: with a package name "1 box + 3 bottles"; without one (legacy lots)
+// neutral wording that names only the recorded size: "1 × 6-bottle pack + 3 bottles".
+export function describeInBoxes(qty, perBox, unit, packName) {
   const q = Number(qty), p = Number(perBox);
   if (!Number.isFinite(q) || !Number.isFinite(p) || p <= 0 || q < 0) return null;
   const full = Math.floor(q / p + 1e-9);
   const loose = Math.round((q - full * p) * 100) / 100;
-  const u = unitLabel(unit);
-  const boxes = `${full} full box${full === 1 ? "" : "es"}`;
-  return loose > 0 ? `${boxes} + ${fmt(loose)} ${u}` : boxes;
+  const packs = isBlank(packName)
+    ? `${full} × ${fmt(p)}-${countLabel(unit, 1)} pack${full === 1 ? "" : "s"}`
+    : `${full} ${countLabel(packName, full)}`;
+  return loose > 0 ? `${packs} + ${fmt(loose)} ${countLabel(unit, loose)}` : packs;
+}
+
+// Why a package name can't be used (null when it can). baseUnit = the lot's unit.
+export function packNameProblem(name, baseUnit) {
+  if (isBlank(name)) return "Choose a package name (for example Box), or type your own.";
+  const v = validatePackUnit(name, baseUnit);
+  if (v.ok) return null;
+  if (v.reason === "too_long") return `The package name can be at most ${PACK_UNIT_MAX_LENGTH} characters.`;
+  if (v.reason === "measured_unit") return `"${String(name).trim()}" is a measurement, not a package. Choose a package name such as Box.`;
+  return `The package name can't be the same as the unit inside it ("${unitLabel(baseUnit)}"). Choose the name of the outer package, or turn packaging off.`;
 }
 
 // history: { logs, countLines } — counts of this lot's usage logs (any, incl.
@@ -44,13 +67,14 @@ export function hasHistory(history) {
 }
 
 // original: the lot row as loaded. form: edited fields (strings from inputs).
-// packagingEnabled / unitsPerBox: the packaging controls. confirmed: the
+// packagingEnabled / unitsPerBox / packUnit: the packaging controls (packUnit
+// undefined = keep the lot's saved package name). confirmed: the
 // confirmation checkbox. Returns
 //   { status: "invalid" | "blocked" | "needs_confirmation" | "ok",
 //     errors, blocks, confirmations, payload }
 // payload is set only when status is "ok"; its quantities are exactly the
 // numbers typed (never converted).
-export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, history, confirmed = false }) {
+export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, packUnit, history, confirmed = false }) {
   const errors = [];
   const qr = num(form.quantity_received), cq = num(form.current_quantity), low = num(form.low_stock_threshold);
   if (!Number.isFinite(qr) || qr < 0) errors.push("Quantity received must be a number of 0 or more.");
@@ -61,16 +85,37 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, his
 
   const wasPackaged = original.units_per_carton !== null && original.units_per_carton !== undefined;
   const oldPer = wasPackaged ? Number(original.units_per_carton) : null;
+  // Package name: the saved one unless a different one was chosen; cleared with packaging.
+  const oldPack = isBlank(original.pack_unit) ? null : original.pack_unit;
+  const newPack = !packagingEnabled ? null
+    : packUnit === undefined || (oldPack !== null && String(packUnit) === String(oldPack)) ? oldPack
+    : isBlank(packUnit) ? null : String(packUnit).trim();
+  const packNameChanged = packagingEnabled && newPack !== oldPack;
+  const packWord = newPack !== null ? countLabel(newPack, 1) : "box";
   let newPer = null;
   if (packagingEnabled) {
     const p = num(unitsPerBox);
     const unchanged = wasPackaged && p === oldPer;
     if (!Number.isFinite(p) || (!unchanged && (!Number.isInteger(p) || p < 1))) {
-      errors.push(`Enter how many ${unitLabel(form.unit)} are in each box (a whole number of 1 or more), or turn packaging off.`);
+      errors.push(`Enter how many ${unitLabel(form.unit)} are in each ${packWord} (a whole number of 1 or more), or turn packaging off.`);
     } else newPer = p;
   }
 
   const unitChanged = normUnit(form.unit) !== normUnit(original.unit);
+  if (packagingEnabled) {
+    // A name is needed when packaging is newly set up or a saved name is removed;
+    // a legacy packaged lot without one stays as it is. A saved name is only
+    // re-checked when it or the unit changes.
+    if (newPack === null) {
+      if (!wasPackaged || oldPack !== null) errors.push(packNameProblem(null, form.unit));
+    } else if (packNameChanged || unitChanged) {
+      const problem = packNameProblem(newPack, form.unit);
+      if (problem) errors.push(problem);
+    }
+    if (newPack !== null && packNameChanged && newPer !== null && !Number.isInteger(newPer)) {
+      errors.push(`This lot's box size (${fmt(newPer)}) isn't a whole number, so a package name can't be set. Enter a whole-number box size first.`);
+    }
+  }
   const packaging = !wasPackaged && packagingEnabled ? "enable"
     : wasPackaged && !packagingEnabled ? "disable"
     : wasPackaged && packagingEnabled && newPer !== null && newPer !== oldPer ? "change" : "none";
@@ -81,7 +126,7 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, his
   const hist = hasHistory(history);
   const blocks = [];
   const confirmations = [];
-  const reinterprets = unitChanged || packaging !== "none";
+  const reinterprets = unitChanged || packaging !== "none" || packNameChanged;
 
   if (reinterprets && hist !== false) {
     const why = hist === null
@@ -91,19 +136,29 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, his
     if (packaging === "enable") blocks.push(`${why}, so packaging can't be turned on — that would change what those recorded amounts mean.`);
     if (packaging === "disable") blocks.push(`${why}, so packaging can't be turned off — that would change what those recorded amounts mean.`);
     if (packaging === "change") blocks.push(`${why}, so its box size can't be changed from ${fmt(oldPer)} to ${fmt(newPer)} ${u} per box — that would change how those recorded amounts read as boxes.`);
+    if (packNameChanged && packaging !== "enable") {
+      blocks.push(oldPack === null
+        ? `${why}, so a package name can't be added now — it would relabel those recorded amounts.`
+        : `${why}, so its package name can't be changed from "${oldPack}" to "${newPack}" — it would relabel those recorded amounts.`);
+    }
   }
   if (blocks.length) return { status: "blocked", errors: [], blocks, confirmations: [], payload: null };
 
   const amounts = `${fmt(qr)} ${u} received and ${fmt(cq)} ${u} current`;
   if (unitChanged) confirmations.push(`The unit changes from "${oldU}" to "${u}". Nothing is converted: the lot will read ${amounts}.`);
   if (packaging === "enable") {
-    const inBoxes = describeInBoxes(cq, newPer, u);
-    confirmations.push(`Packaging is turned on with ${fmt(newPer)} ${u} per box. Nothing is multiplied: the lot keeps ${amounts}${inBoxes ? ` (${inBoxes})` : ""}. Enter the quantities in ${u}, not in boxes.`);
+    const inBoxes = describeInBoxes(cq, newPer, u, newPack);
+    confirmations.push(`Packaging is turned on: 1 ${packWord} = ${fmt(newPer)} ${countLabel(u, newPer)}. Nothing is multiplied: the lot keeps ${amounts}${inBoxes ? ` (${inBoxes})` : ""}. Enter the quantities in ${u}, not in ${countLabel(packWord, 2)}.`);
   }
   if (packaging === "disable") confirmations.push(`Packaging is turned off. Nothing is divided: the lot keeps ${amounts}; boxes are no longer shown.`);
   if (packaging === "change") {
-    const inBoxes = describeInBoxes(cq, newPer, u);
-    confirmations.push(`The box size changes from ${fmt(oldPer)} to ${fmt(newPer)} ${u} per box. Nothing is converted: the lot keeps ${amounts}${inBoxes ? ` (${inBoxes})` : ""}.`);
+    const inBoxes = describeInBoxes(cq, newPer, u, newPack);
+    confirmations.push(`The box size changes from ${fmt(oldPer)} to ${fmt(newPer)} ${u} per ${packWord}. Nothing is converted: the lot keeps ${amounts}${inBoxes ? ` (${inBoxes})` : ""}.`);
+  }
+  if (packNameChanged && packaging !== "enable") {
+    const inBoxes = describeInBoxes(cq, newPer, u, newPack);
+    const what = oldPack === null ? `The package name is set to "${newPack}"` : `The package name changes from "${oldPack}" to "${newPack}"`;
+    confirmations.push(`${what} (1 ${packWord} = ${fmt(newPer)} ${countLabel(u, newPer)}). Nothing is converted: the lot keeps ${amounts}${inBoxes ? ` (${inBoxes})` : ""}.`);
   }
   if (confirmations.length && !confirmed) return { status: "needs_confirmation", errors: [], blocks: [], confirmations, payload: null };
 
@@ -116,13 +171,14 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, his
     expiry_date: form.expiry_date || null,
     low_stock_threshold: low,
     units_per_carton: packagingEnabled ? newPer : null,
+    pack_unit: newPack,
   };
   return { status: "ok", errors: [], blocks: [], confirmations, payload };
 }
 
 // ─── Saving (U2c-1) ─────────────────────────────────────────────────────────
 // The Edit Lot fields. Only the ones the user actually changed are written.
-export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton"];
+export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit"];
 const NUMERIC_FIELDS = new Set(["quantity_received", "current_quantity", "low_stock_threshold", "units_per_carton"]);
 
 // Comparable value: null for missing (and for a blank expiry date), a number
@@ -166,6 +222,7 @@ export function describeSaveError(e) {
   if (e?.kind === "permission") return "You don't have permission to edit lots, so nothing was saved.";
   const msg = String(e?.message || "");
   if (msg === "packaging_locked") return `This lot now has usage or Stock Count records, so its ${FIELD_LABEL[e?.details] || "packaging"} can't be changed. Nothing was saved.`;
+  if (e?.code === "23514" && /reagents_pack_unit_valid/.test(msg)) return `The database refused the package name (it must be 1–${PACK_UNIT_MAX_LENGTH} characters, needs a box size, and can't be the same as the unit). Nothing was saved.`;
   if (e?.code === "23514") return `The database refused one of the values (${(msg.match(/constraint "([^"]+)"/) || [])[1] || "check failed"}). Nothing was saved.`;
   if (isNetworkError(e)) return "Couldn't reach the database, so nothing was saved. Check the connection and try again.";
   return `The database refused the change${msg ? ` (${msg})` : ""}. Nothing was saved.`;

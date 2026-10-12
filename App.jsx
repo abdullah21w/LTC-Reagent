@@ -11,7 +11,8 @@ import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
-import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit } from "./lotEdit";
+import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit, hasHistory } from "./lotEdit";
+import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
@@ -3508,6 +3509,11 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const wasPackaged = reagent.units_per_carton !== null && reagent.units_per_carton !== undefined;
   const [packagingEnabled, setPackagingEnabled] = useState(wasPackaged);
   const [unitsPerCarton, setUnitsPerCarton] = useState(wasPackaged ? String(reagent.units_per_carton) : "");
+  // Package name (pack_unit): one of the suggested names, or "Other" with a typed name.
+  const savedPack = reagent.pack_unit ?? "";
+  const isSuggested = (v) => SUGGESTED_PACK_UNITS.includes(normalizeUnit(v).key);
+  const [packUnit, setPackUnit] = useState(savedPack);
+  const [otherPack, setOtherPack] = useState(savedPack !== "" && !isSuggested(savedPack));
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -3524,11 +3530,20 @@ function EditReagentModal({ reagent, onClose, onSave }) {
     }).catch(() => { if (live) setHistory({ logs: null, countLines: null, loaded: true }); });
     return () => { live = false; };
   }, [reagent.id]);
+  // Unit and packaging can only be edited once the lot is known to have no
+  // usage logs or Stock Count lines (the database enforces the same lock).
+  const hist = hasHistory(history);
+  const locked = !history.loaded || hist !== false;
 
-  const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, history, confirmed });
+  const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, packUnit, history, confirmed });
   const unit = (form.unit || "").trim() || "units";
   const perBox = packagingEnabled ? Number(unitsPerCarton) : null;
-  const inBoxes = (v) => (perBox ? describeInBoxes(v, perBox, unit) : null);
+  const packName = packagingEnabled && packUnit.trim() !== "" ? packUnit.trim() : null;
+  const inBoxes = (v) => (perBox ? describeInBoxes(v, perBox, unit, packName) : null);
+  // Live preview of the packaging (display only; quantities are never converted).
+  const preview = packagingEnabled && Number.isInteger(perBox) && perBox >= 1
+    ? `1 ${packName ? unitLabel(packName, 1) : "package"} = ${perBox} ${unitLabel(unit, perBox)}`
+    : null;
   // Any edit to what the confirmation describes asks for it again.
   const confirmKey = plan.confirmations.join("|");
   useEffect(() => { setConfirmed(false); }, [confirmKey]);
@@ -3537,7 +3552,7 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const pending = plan.status === "ok" ? buildLotUpdate(reagent, plan.payload).changed : [];
   const canSave = plan.status === "ok" && pending.length > 0;
   // A new edit clears the previous save error.
-  const formKey = JSON.stringify([form, packagingEnabled, unitsPerCarton]);
+  const formKey = JSON.stringify([form, packagingEnabled, unitsPerCarton, packUnit]);
   useEffect(() => { setSaveError(null); }, [formKey]);
 
   async function submit() {
@@ -3551,11 +3566,15 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   }
 
   const hint = { fontSize: 11.5, color: "#0F7173", marginTop: 4, fontWeight: 400 };
+  const chip = (on, disabled) => ({ padding: "6px 11px", borderRadius: 16, fontSize: 12.5, fontWeight: 600, border: `1px solid ${on ? "#0F7173" : "#CBD5D3"}`, background: on ? "#0F7173" : "#fff", color: on ? "#fff" : "#3A4A48", opacity: disabled ? 0.55 : 1, cursor: disabled ? "default" : "pointer" });
+  const savedPer = wasPackaged ? Number(reagent.units_per_carton) : null;
+  const savedPackaging = !wasPackaged ? "Not packaged — counted in single " + unitLabel(reagent.unit, 2)
+    : `${reagent.pack_unit ? `1 ${unitLabel(reagent.pack_unit, 1)}` : "1 package"} = ${savedPer} ${unitLabel(reagent.unit, savedPer)}${reagent.pack_unit ? "" : " (package name not recorded)"}`;
   return (
     <Modal title={`Edit lot ${reagent.lot_number}`} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <label style={labelStyle}>Lot number<input style={inputStyle} value={form.lot_number} onChange={set("lot_number")} /></label>
-        <label style={labelStyle}>Unit<input style={inputStyle} value={form.unit} onChange={set("unit")} /></label>
+        <label style={labelStyle}>Unit<input style={{ ...inputStyle, ...(locked ? { background: "#F1F4F3", color: "#6B7B79" } : {}) }} value={form.unit} onChange={set("unit")} disabled={locked} /></label>
         <div style={{ display: "flex", gap: 10 }}>
           <label style={{ ...labelStyle, flex: 1 }}>Quantity received ({unit})<input type="number" style={inputStyle} value={form.quantity_received} onChange={set("quantity_received")} />
             {inBoxes(form.quantity_received) && <div style={hint}>= {inBoxes(form.quantity_received)}</div>}
@@ -3564,14 +3583,42 @@ function EditReagentModal({ reagent, onClose, onSave }) {
             {inBoxes(form.current_quantity) && <div style={hint}>= {inBoxes(form.current_quantity)}</div>}
           </label>
         </div>
-        {packagingEnabled && <div style={{ fontSize: 11.5, color: "#516361", marginTop: -6 }}>Quantities are stored in {unit} (the unit inside each box), never in boxes.</div>}
+        {packagingEnabled && <div style={{ fontSize: 11.5, color: "#516361", marginTop: -6 }}>Quantities are stored in {unit} (the unit inside each {packName ? unitLabel(packName, 1) : "package"}), never in {packName ? unitLabel(packName, 2) : "packages"}.</div>}
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
-          <input type="checkbox" checked={packagingEnabled} onChange={(e) => setPackagingEnabled(e.target.checked)} />
-          This item comes in boxes containing multiple {form.unit || "units"}
-        </label>
-        {packagingEnabled && (
-          <label style={labelStyle}>{form.unit || "Units"} per box<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+        {locked ? (
+          <div data-testid="packaging-locked" style={{ background: "#F1F4F3", border: "1px solid #CBD5D3", borderRadius: 7, padding: "10px 12px", fontSize: 12.5, color: "#3A4A48" }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Unit and packaging (locked)</div>
+            <div>Unit: {String(reagent.unit ?? "").trim() || "—"}</div>
+            <div>Packaging: {savedPackaging}</div>
+            <div style={{ marginTop: 6, color: "#516361" }}>
+              {!history.loaded ? "Checking this lot's history…"
+                : hist === null ? "This lot's usage and Stock Count history couldn't be checked, so its unit and packaging can't be changed right now. The other fields can still be edited."
+                : `This lot has ${history.logs} usage log${history.logs === 1 ? "" : "s"} and ${history.countLines} Stock Count line${history.countLines === 1 ? "" : "s"} recorded in ${unitLabel(reagent.unit, 2)}. Its unit and packaging stay as they are so those records keep their meaning; the other fields can still be edited. A lot packed differently should be received as a new lot.`}
+            </div>
+          </div>
+        ) : (
+          <>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: "#3A4A48", cursor: "pointer" }}>
+              <input type="checkbox" checked={packagingEnabled} onChange={(e) => setPackagingEnabled(e.target.checked)} />
+              This item comes in packages (box, carton, kit …) containing multiple {form.unit || "units"}
+            </label>
+            {packagingEnabled && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, borderLeft: "3px solid #CFE3E2", paddingLeft: 10 }}>
+                <div style={labelStyle}>Package name
+                  <div role="group" aria-label="Package name" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {SUGGESTED_PACK_UNITS.map((s) => {
+                      const on = !otherPack && normalizeUnit(packUnit).key === s;
+                      return <button type="button" key={s} aria-pressed={on} style={chip(on)} onClick={() => { setOtherPack(false); setPackUnit(s); }}>{s[0].toUpperCase() + s.slice(1)}</button>;
+                    })}
+                    <button type="button" aria-pressed={otherPack} style={chip(otherPack)} onClick={() => { if (!otherPack) { setOtherPack(true); if (isSuggested(packUnit)) setPackUnit(""); } }}>Other…</button>
+                  </div>
+                  {otherPack && <input aria-label="Other package name" style={{ ...inputStyle, marginTop: 6 }} value={packUnit} maxLength={60} placeholder="e.g. sachet" onChange={(e) => setPackUnit(e.target.value)} />}
+                </div>
+                <label style={labelStyle}>{form.unit || "Units"} per {packName ? unitLabel(packName, 1) : "package"}<input type="number" style={inputStyle} value={unitsPerCarton} onChange={(e) => setUnitsPerCarton(e.target.value)} /></label>
+                {preview && <div data-testid="pack-preview" style={{ fontSize: 12.5, fontWeight: 600, color: "#0F7173" }}>{preview} — preview only; stored quantities stay in {unit}.</div>}
+              </div>
+            )}
+          </>
         )}
 
         <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>

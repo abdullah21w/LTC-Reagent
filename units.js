@@ -124,15 +124,21 @@ export function parsePackaging(unitsPerCarton) {
 // Check a saved outer-package label against the lot's base unit.
 // → { ok, label: { singular, plural } | null, reason }
 //   blank            ok, label null (nothing saved)
+//   over 40 chars    refused ("too_long"; the database allows at most 40)
 //   measured unit    refused ("measured_unit": a pack can't be "mL")
 //   same as base     refused ("same_as_base_unit": "1 box = 5 boxes")
+export const PACK_UNIT_MAX_LENGTH = 40;
 export function validatePackUnit(label, baseUnit) {
   if (label === null || label === undefined || String(label).trim() === "") return { ok: true, label: null, reason: null };
+  if (String(label).trim().length > PACK_UNIT_MAX_LENGTH) return { ok: false, label: null, reason: "too_long" };
   const p = normalizeUnit(label), b = normalizeUnit(baseUnit);
   if (!p.countable) return { ok: false, label: null, reason: "measured_unit" };
   if (b.key !== "" && p.key === b.key) return { ok: false, label: null, reason: "same_as_base_unit" };
   return { ok: true, label: { singular: unitLabel(label, 1), plural: unitLabel(label, 2) }, reason: null };
 }
+
+// Package names offered when packaging is set up (any other name may be typed).
+export const SUGGESTED_PACK_UNITS = ["box", "carton", "pack", "kit", "case", "bag", "tray", "rack"];
 
 // Legacy display fallback, used only when no outer label is saved: "box",
 // or "carton" when the base unit is a box, "case" when it is a carton. Never
