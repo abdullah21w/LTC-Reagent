@@ -90,16 +90,27 @@ function compareLots(a, b) {
   return new Date(a.date_added) - new Date(b.date_added);
 }
 
-// When a lot has carton packaging enabled, current_quantity/quantity_received
-// are stored in the lot's `unit` — the unit inside each box, the one Log use
-// subtracts — never in boxes. This turns that stored amount into a { main, sub }
-// display: whole boxes as the headline number, the stored amount as the
-// smaller supporting text.
-// Lots without packaging return { main: "<qty> <unit>", sub: null } unchanged.
-function formatCartonQty(qty, unitsPerCarton, unit) {
-  if (!unitsPerCarton || unitsPerCarton <= 0) return { main: `${qty} ${unit}`, sub: null };
-  const cartons = Math.floor(qty / unitsPerCarton);
-  return { main: `${cartons} box${cartons === 1 ? "" : "es"}`, sub: `${qty} ${unit} remaining` };
+// U2c-3 — Log use wording (display only; nothing here is stored or used in a
+// calculation). A lot's amounts are always in its own `unit`, the one Log use
+// subtracts. Packaging only adds a reading in packages, through the shared
+// helpers: the saved package name (pack_unit) when there is one, otherwise
+// neutral wording that invents no name. A package reading is arithmetic
+// ("Equivalent: 2 boxes + 2 pieces"), not a count of sealed packages on the
+// shelf. A box size that isn't a whole number of 1 or more is never used to
+// split an amount.
+const qtyInUnit = (qty, unit) => `${fmtQty(qty)} ${unitLabel(unit, Number(qty))}`;
+function lotPackagingText(lot) {
+  if (!lot || lot.units_per_carton === null || lot.units_per_carton === undefined || lot.units_per_carton === "") return null;
+  const pack = packEquivalent([lot]);
+  if (!pack) return `recorded package size (${fmtQty(lot.units_per_carton)}) isn't a whole number of 1 or more, so amounts are shown in ${unitLabel(lot.unit, 2)} only`;
+  return pack.verified
+    ? `1 ${pack.packUnit.singular} = ${qtyInUnit(pack.perBox, lot.unit)}`
+    : `packs of ${qtyInUnit(pack.perBox, lot.unit)} (package name not recorded)`;
+}
+function lotLeftText(lot) {
+  const left = `${qtyInUnit(lot.current_quantity, lot.unit)} left`;
+  const inPacks = packEquivalentText(lot.current_quantity, packEquivalent([lot]), unitText(lot.unit));
+  return inPacks ? `${left} · Equivalent: ${inPacks}` : left;
 }
 
 // U2b — quantity displays that never add different units together. The main
@@ -3452,7 +3463,7 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
             <select style={inputStyle} value={chosenLot ? chosenLot.id : ""} onChange={(e) => setSelectedLotId(e.target.value)}>
               {lots.map((l, idx) => (
                 <option key={l.id} value={l.id}>
-                  Lot {l.lot_number} — {(() => { const q = formatCartonQty(l.current_quantity, l.units_per_carton, l.unit); return q.sub ? `${q.main}, ${q.sub}` : `${q.main} left`; })()} — {l.expiry_date ? `expires ${l.expiry_date}` : "no expiry"}{idx === 0 ? " (FEFO suggestion)" : ""}
+                  Lot {l.lot_number} · {lotLeftText(l)} · {l.expiry_date ? `Expires ${l.expiry_date}` : "No expiry"}{idx === 0 ? " (FEFO suggestion)" : ""}
                 </option>
               ))}
             </select>
@@ -3463,7 +3474,7 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
             {selectedLotId && chosenLot.id !== fefo.id ? (
               <>You picked <b>Lot {chosenLot.lot_number}</b> instead of the FEFO suggestion (Lot {fefo.lot_number}).</>
             ) : (
-              <>Using <b>Lot {chosenLot.lot_number}</b> ({(() => { const q = formatCartonQty(chosenLot.current_quantity, chosenLot.units_per_carton, chosenLot.unit); return q.sub ? `${q.main}, ${q.sub}` : `${q.main} left`; })()}, {chosenLot.expiry_date ? `expires ${chosenLot.expiry_date}` : "no expiry date"}){lots.length > 1 ? ` — ${lots.length} lots available` : ""}</>
+              <>Using <b>Lot {chosenLot.lot_number}</b> · {lotLeftText(chosenLot)} · {chosenLot.expiry_date ? `Expires ${chosenLot.expiry_date}` : "No expiry date"}{lots.length > 1 ? ` · ${lots.length} lots available` : ""}</>
             )}
           </div>
         )}
@@ -3488,9 +3499,23 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>{chosenLot?.units_per_carton ? `Units used (of ${chosenLot.units_per_carton}/box)` : `Amount used (${chosenLot?.unit || "unit"})`}<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({unitLabel(chosenLot?.unit, 2)})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
+        {(() => {
+          // Display only: how the lot is packed, and the typed amount read in packages.
+          const packText = lotPackagingText(chosenLot);
+          if (!packText) return null;
+          const typed = Number(amount);
+          const inPacks = amount !== "" && Number.isFinite(typed) && typed > 0 ? packEquivalentText(typed, packEquivalent([chosenLot]), unitText(chosenLot.unit)) : null;
+          return (
+            <div data-testid="log-pack-hint" style={{ fontSize: 11.5, color: "#516361", marginTop: -6 }}>
+              {packText[0].toUpperCase() + packText.slice(1)}. Enter the amount in {unitLabel(chosenLot.unit, 2)}.
+              {packText.startsWith("recorded") ? null : " Equivalents are calculated from the amount, not a count of sealed packages."}
+              {inPacks && <div style={{ color: "#0F7173", fontWeight: 600, marginTop: 2 }}>{qtyInUnit(typed, chosenLot.unit)} · Equivalent: {inPacks}</div>}
+            </div>
+          );
+        })()}
         <label style={labelStyle}>Used by
           <div style={{ ...inputStyle, background: "#F0F3F2", color: "#516361", display: "flex", alignItems: "center" }}>{usedBy}</div>
         </label>
