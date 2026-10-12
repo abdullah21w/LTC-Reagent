@@ -11,7 +11,7 @@ import Charts from "./Charts";
 import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
-import { planLotEdit, describeInBoxes } from "./lotEdit";
+import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit } from "./lotEdit";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
@@ -227,8 +227,9 @@ export default function App() {
     setSnoozes(sn || []);
   }
 
+  // Returns the insert result ({ error }) so a caller can tell whether it was recorded.
   async function logActivity(action, entity, description, performedBy) {
-    await supabase.from("audit_log").insert({ action, entity, description, performed_by: performedBy || username });
+    return await supabase.from("audit_log").insert({ action, entity, description, performed_by: performedBy || username });
   }
 
   useEffect(() => {
@@ -416,22 +417,20 @@ export default function App() {
     loadAll();
   }
 
-  async function saveEditedReagent(updated) {
-    if (!can("edit")) return;
-    await supabase.from("reagents").update({
-      lot_number: updated.lot_number,
-      unit: updated.unit,
-      quantity_received: updated.quantity_received,
-      current_quantity: updated.current_quantity,
-      expiry_date: updated.expiry_date || null,
-      low_stock_threshold: updated.low_stock_threshold,
-      units_per_carton: updated.units_per_carton ?? null,
-      edited_by: username,
-      edited_at: new Date().toISOString(),
-    }).eq("id", updated.id);
-    await logActivity("edit", "reagent", `${updated.name || ""} — Lot ${updated.lot_number}`.trim());
-    setEditReagent(null);
-    loadAll();
+  // Edit Lot save (lotEdit.js saveLotEdit): only changed fields are written, and
+  // only if each still holds the value it had when the window opened. The window
+  // closes and the activity is logged only after the database confirmed it; any
+  // failure comes back as a message and the window stays open.
+  async function saveEditedReagent(original, updated) {
+    if (!can("edit")) return { ok: false, message: "You don't have permission to edit lots, so nothing was saved." };
+    const result = await saveLotEdit({ client: supabase, original, payload: updated, username, logActivity });
+    if (result.ok) {
+      setEditReagent(null);
+      loadAll();
+      // Saved, but the activity entry failed: say so plainly (the save is not repeated).
+      if (result.auditLogged === false) alert(result.warning);
+    }
+    return result;
   }
 
   async function deleteReagent(id) {
@@ -3511,6 +3510,7 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const [unitsPerCarton, setUnitsPerCarton] = useState(wasPackaged ? String(reagent.units_per_carton) : "");
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   // Usage logs and Stock Count lines recorded against this lot (see lotEdit.js):
   // null until loaded, or if the lookup fails — then changes of meaning stay blocked.
   const [history, setHistory] = useState({ logs: null, countLines: null, loaded: false });
@@ -3533,11 +3533,21 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const confirmKey = plan.confirmations.join("|");
   useEffect(() => { setConfirmed(false); }, [confirmKey]);
 
+  // Fields that would actually be written (unchanged ones never are).
+  const pending = plan.status === "ok" ? buildLotUpdate(reagent, plan.payload).changed : [];
+  const canSave = plan.status === "ok" && pending.length > 0;
+  // A new edit clears the previous save error.
+  const formKey = JSON.stringify([form, packagingEnabled, unitsPerCarton]);
+  useEffect(() => { setSaveError(null); }, [formKey]);
+
   async function submit() {
-    if (saving || plan.status !== "ok") return;
+    if (saving || !canSave) return;
     setSaving(true);
-    await onSave(plan.payload);
-    setSaving(false);
+    setSaveError(null);
+    let result;
+    try { result = await onSave(reagent, plan.payload); } catch (e) { result = { ok: false, message: "The change couldn't be saved. Nothing was saved." }; }
+    // On success the window is closed by the parent; on failure it stays open.
+    if (!result || !result.ok) { setSaveError(result?.message || "The change couldn't be saved. Nothing was saved."); setSaving(false); }
   }
 
   const hint = { fontSize: 11.5, color: "#0F7173", marginTop: 4, fontWeight: 400 };
@@ -3588,10 +3598,14 @@ function EditReagentModal({ reagent, onClose, onSave }) {
             </label>
           </div>
         )}
+        {saveError && (
+          <div role="alert" style={{ background: "#FDECEA", border: "1px solid #F5C2BB", borderRadius: 7, padding: "9px 12px", fontSize: 12.5, color: "#A33A26" }}>{saveError}</div>
+        )}
+        {plan.status === "ok" && pending.length === 0 && <div style={{ fontSize: 12, color: "#516361" }}>No changes to save yet.</div>}
         <button
-          disabled={saving || plan.status !== "ok"}
+          disabled={saving || !canSave}
           onClick={submit}
-          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving || plan.status !== "ok" ? 0.5 : 1 }}
+          style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving || !canSave ? 0.5 : 1 }}
         >{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
