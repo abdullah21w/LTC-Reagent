@@ -9,11 +9,11 @@ import BarcodeScanner from "./BarcodeScanner";
 import ReceiveWizard, { YesNoRow } from "./ReceiveWizard";
 import Charts from "./Charts";
 import StockCount from "./StockCount";
-import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
 import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit, hasHistory } from "./lotEdit";
 import { saveReceipt } from "./receiveSave";
 import { saveLogUse, newLogId, checkUseAmount } from "./logUseSave";
+import { saveLogEdit, saveLogUndo, newRequestId, checkEditAmount, SPREAD_UNAVAILABLE } from "./logEditSave";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
@@ -203,6 +203,7 @@ export default function App() {
   const [editReagent, setEditReagent] = useState(null);
   const [discardReagentTarget, setDiscardReagentTarget] = useState(null);
   const [editLog, setEditLog] = useState(null);
+  const undoInFlight = useRef(new Set()); // log ids whose undo is on its way
   const [error, setError] = useState("");
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -480,96 +481,46 @@ export default function App() {
   // Returns an error message (nothing written) or nothing (saved). Both checks
   // run before the first write: stock-count corrections change only through
   // Stock count, and the Stock Count user name is reserved.
+  // Atomic edit / undo (logEditSave.js → database functions log_edit / log_undo,
+  // ADD_ATOMIC_LOG_EDIT.sql): the log, the stock (computed from the locked Lot row),
+  // the existing Lot / device restoration (undo) and the activity entry are ONE
+  // transaction. Stock-count corrections and logs covered by the Lot's latest
+  // completed count are refused by the database. Returns nothing when saved, else
+  // the reason (the window stays open with the entries kept).
   async function saveEditedLog(updated, original) {
-    if (!can("edit")) return;
+    if (!can("edit")) return "You don't have permission to edit log entries, so nothing was saved.";
     if (isCountDerivedLog(original)) return COUNT_LOG_LOCKED_MSG;
     if (isReservedUsedBy(updated.used_by)) return `"${updated.used_by}" is reserved for stock-count corrections. Enter who used it.`;
+    // "Spread over a range" is temporarily unavailable (the previous version deleted the original entry).
+    if (updated.spreadMode) return SPREAD_UNAVAILABLE;
     const item = reagents.find((r) => r.id === original.reagent_id);
-    if (item) {
-      const delta = updated.amount - original.amount;
-      const newQty = Math.max(0, item.current_quantity - delta);
-      const updatePayload = { current_quantity: newQty };
-      if (item.deleted && newQty > 0) {
-        updatePayload.deleted = false;
-        updatePayload.deleted_by = null;
-        updatePayload.deleted_at = null;
-      }
-      await supabase.from("reagents").update(updatePayload).eq("id", item.id);
+    const result = await saveLogEdit({ client: supabase, request: { requestId: updated.requestId, original, amount: updated.amount, date: updated.date, usedBy: updated.used_by, note: updated.note, testedByQC: updated.tested_by_qc, unit: item?.unit }, actor: username });
+    if (result.ok) {
+      setEditLog(null);
+      loadAll();
+      return;
     }
-
-    if (updated.spreadMode) {
-      // "Spread over a range" replaces the single row with several smaller
-      // ones across the chosen dates, instead of updating it in place — a
-      // date range can't live in one consumption_logs row.
-      const entries = buildSpreadEntries(updated.amount, updated.rangeFrom, updated.rangeTo);
-      await supabase.from("consumption_logs").delete().eq("id", updated.id);
-      await supabase.from("consumption_logs").insert(entries.map((e) => ({
-        reagent_id: original.reagent_id, amount: e.amount, date: e.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
-        date_provenance: "manual_spread", // manual quantity, dates estimated across the range
-      })));
-      await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by}, spread from ${updated.rangeFrom} to ${updated.rangeTo}`);
-    } else {
-      await supabase.from("consumption_logs").update({
-        amount: updated.amount, date: updated.date, used_by: updated.used_by, note: updated.note, tested_by_qc: updated.tested_by_qc,
-        edited_by: username, edited_at: new Date().toISOString(),
-      }).eq("id", updated.id);
-      await logActivity("edit", "log", `${item ? item.name : "Unknown"} — ${updated.amount} used by ${updated.used_by} on ${updated.date}`);
-    }
-    setEditLog(null);
-    loadAll();
+    if (result.outcome === "stale" || result.outcome === "log_not_found") loadAll();
+    return result.message;
   }
 
   async function deleteLog(log) {
     if (!can("delete")) return;
-    // Before anything is written (this flow restores stock first).
+    // Before anything is sent (count-derived logs change only through Stock Count).
     if (isCountDerivedLog(log)) { alert(COUNT_LOG_LOCKED_MSG); return; }
+    if (undoInFlight.current.has(log.id)) return; // a second tap while the first undo is on its way
     if (!confirm("Remove this log entry? The amount will be added back to stock, but it stays in Reports for audit purposes.")) return;
-    const item = reagents.find((r) => r.id === log.reagent_id);
-    if (item) {
-      const restoredQty = item.current_quantity + log.amount;
-      const updatePayload = { current_quantity: restoredQty };
-      // If this lot had been auto-removed for being depleted, bring it back
-      // now that it has stock again.
-      if (item.deleted && restoredQty > 0) {
-        updatePayload.deleted = false;
-        updatePayload.deleted_by = null;
-        updatePayload.deleted_at = null;
-      }
-      // If this log entry had promoted this lot to "active on device", undo that
-      // too — but only if no OTHER remaining (non-deleted) log entry still points
-      // to this same lot. If another entry still uses it, it's genuinely still the
-      // active lot and shouldn't be demoted just because we're undoing one entry.
-      const otherLogsForThisLot = logs.filter((l) => l.id !== log.id && l.reagent_id === item.id && !l.deleted);
-      const shouldRevertActiveStatus = log.active_device_changed && otherLogsForThisLot.length === 0;
-      if (shouldRevertActiveStatus) {
-        updatePayload.active_on_device = false;
-      }
-      await supabase.from("reagents").update(updatePayload).eq("id", item.id);
-      if (shouldRevertActiveStatus && log.previous_active_lot_id) {
-        const prevLot = reagents.find((r) => r.id === log.previous_active_lot_id);
-        const prevPayload = { active_on_device: true };
-        if (prevLot && prevLot.deleted) {
-          // It had been auto-removed (e.g. depleted) — bring it back into view
-          // so it actually shows up as the active lot on the device again.
-          prevPayload.deleted = false;
-          prevPayload.deleted_by = null;
-          prevPayload.deleted_at = null;
-        }
-        await supabase.from("reagents").update(prevPayload).eq("id", log.previous_active_lot_id);
-      }
+    undoInFlight.current.add(log.id);
+    let result;
+    try {
+      result = await saveLogUndo({ client: supabase, request: { requestId: newRequestId(), log }, actor: username });
+    } catch {
+      result = { ok: false, outcome: "unknown", message: "Something went wrong, so it isn't known whether this entry was undone. Press Undo again — it is safe: an entry can only be undone once." };
+    } finally {
+      undoInFlight.current.delete(log.id);
     }
-    await supabase.from("consumption_logs").update({ deleted: true, deleted_by: username, deleted_at: new Date().toISOString() }).eq("id", log.id);
-    await logActivity("delete", "log", `${item ? item.name : "Unknown"} — ${log.amount} used by ${log.used_by} on ${log.date}`);
     loadAll();
-  }
-
-  async function purgeReagent(id) {
-    if (role !== "owner") return;
-    if (!confirm("Permanently erase this record? This cannot be undone and it will disappear from Reports too.")) return;
-    const item = reagents.find((r) => r.id === id);
-    await supabase.from("reagents").delete().eq("id", id);
-    await logActivity("purge", "reagent", item ? `${item.name} — Lot ${item.lot_number}` : id);
-    loadAll();
+    if (!result.ok || result.message) alert(result.message || "This entry was not undone.");
   }
 
   async function purgeLog(id) {
@@ -832,7 +783,7 @@ export default function App() {
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} presets={presets} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {discardReagentTarget && <DiscardModal reagent={discardReagentTarget} onClose={() => setDiscardReagentTarget(null)} onDiscard={discardReagent} />}
-      {editLog && <EditLogModal log={editLog} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
+      {editLog && <EditLogModal log={editLog} lot={reagents.find((r) => r.id === editLog.reagent_id)} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
       {error && <div style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#DC2626", color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 14 }}>{error}</div>}
     </div>
@@ -3709,19 +3660,30 @@ function DiscardModal({ reagent, onClose, onDiscard }) {
   );
 }
 
-function EditLogModal({ log, onClose, onSave }) {
-  const [form, setForm] = useState({ ...log });
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+function EditLogModal({ log, lot, onClose, onSave }) {
+  const [form, setForm] = useState({ ...log, amount: log.amount === null || log.amount === undefined ? "" : String(log.amount) });
+  const set = (k) => (e) => { const v = e.target.value; setForm((f) => ({ ...f, [k]: v })); setRefusal(""); };
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState("exact"); // exact | range
-  const [rangeFrom, setRangeFrom] = useState(log.date);
-  const [rangeTo, setRangeTo] = useState(log.date);
+  const inFlight = useRef(false);
+  // One reference id per window, reused for every attempt: a retry can never
+  // apply this change twice (logEditSave.js).
+  const [requestId] = useState(() => newRequestId());
   const [refusal, setRefusal] = useState("");
+  const amountCheck = checkEditAmount(form.amount, lot, log.amount);
 
   async function submit() {
-    if (saving) return;
+    if (inFlight.current) return;
+    if (!amountCheck.ok) { setRefusal(amountCheck.error); return; }
+    inFlight.current = true;
     setSaving(true);
-    const err = await onSave({ ...form, amount: Number(form.amount), spreadMode: mode === "range", rangeFrom, rangeTo }, log);
+    setRefusal("");
+    let err;
+    try {
+      err = await onSave({ ...form, amount: amountCheck.value, requestId, spreadMode: false }, log);
+    } catch {
+      err = "Something went wrong while saving, so it isn't known whether this change was saved. Your entries are kept. Press \"Save\" again — it is safe: this change can only ever be applied once.";
+    }
+    inFlight.current = false;
     if (err) { setRefusal(err); setSaving(false); }
   }
   return (
@@ -3730,39 +3692,31 @@ function EditLogModal({ log, onClose, onSave }) {
         <div style={{ display: "flex", gap: 6 }}>
           <button
             type="button"
-            onClick={() => setMode("exact")}
-            style={{ flex: 1, background: mode === "exact" ? "#0F7173" : "#fff", color: mode === "exact" ? "#fff" : "#516361", border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700 }}
+            style={{ flex: 1, background: "#0F7173", color: "#fff", border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700 }}
           >
             Exact date
           </button>
           <button
             type="button"
-            onClick={() => setMode("range")}
-            style={{ flex: 1, background: mode === "range" ? "#0F7173" : "#fff", color: mode === "range" ? "#fff" : "#516361", border: "1px solid #C7D1CE", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700 }}
+            disabled
+            title={SPREAD_UNAVAILABLE}
+            style={{ flex: 1, background: "#F0F3F2", color: "#9AA6A4", border: "1px solid #DDE3E1", borderRadius: 7, padding: "8px", fontSize: 13, fontWeight: 700, cursor: "not-allowed" }}
           >
             Spread over a range
           </button>
         </div>
+        <div data-testid="spread-unavailable" style={{ fontSize: 11.5, color: "#7C3E00", marginTop: -4 }}>{SPREAD_UNAVAILABLE}</div>
 
-        <label style={labelStyle}>Amount{mode === "range" ? " (total across the range)" : ""}<input type="number" style={inputStyle} value={form.amount} onChange={set("amount")} /></label>
+        <label style={labelStyle}>Amount<input type="number" inputMode="decimal" style={inputStyle} value={form.amount} onChange={set("amount")} /></label>
+        {form.amount !== "" && !amountCheck.ok && !refusal && <div role="alert" data-testid="edit-amount-error" style={{ fontSize: 12.5, color: "#A33A26", marginTop: -6 }}>{amountCheck.error}</div>}
 
-        {mode === "exact" ? (
-          <label style={labelStyle}>Date<input type="date" style={inputStyle} value={form.date} onChange={set("date")} /></label>
-        ) : (
-          <div style={{ display: "flex", gap: 10 }}>
-            <label style={{ ...labelStyle, flex: 1 }}>From<input type="date" style={inputStyle} value={rangeFrom} max={rangeTo} onChange={(e) => setRangeFrom(e.target.value)} /></label>
-            <label style={{ ...labelStyle, flex: 1 }}>To<input type="date" style={inputStyle} value={rangeTo} min={rangeFrom} onChange={(e) => setRangeTo(e.target.value)} /></label>
-          </div>
-        )}
+        <label style={labelStyle}>Date<input type="date" style={inputStyle} value={form.date} onChange={set("date")} /></label>
 
         <label style={labelStyle}>Used by<input style={inputStyle} value={form.used_by} onChange={set("used_by")} /></label>
         <label style={labelStyle}>Note<input style={inputStyle} value={form.note || ""} onChange={set("note")} /></label>
-        <YesNoRow label="Tested by QC" value={form.tested_by_qc} onChange={(v) => setForm((f) => ({ ...f, tested_by_qc: v }))} />
-        {mode === "range" && (
-          <div style={{ fontSize: 11.5, color: "#8A9694" }}>This replaces the single entry with several smaller ones spread weekly across the range, so it totals the same amount without showing up as one spike on one day.</div>
-        )}
-        {refusal && <div style={{ fontSize: 12.5, color: "#C1432B" }}>{refusal}</div>}
-        <button disabled={saving} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
+        <YesNoRow label="Tested by QC" value={form.tested_by_qc} onChange={(v) => { setForm((f) => ({ ...f, tested_by_qc: v })); setRefusal(""); }} />
+        {refusal && <div role="alert" data-testid="edit-refusal" style={{ fontSize: 12.5, color: "#C1432B" }}>{refusal}</div>}
+        <button disabled={saving || !amountCheck.ok} onClick={submit} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: saving || !amountCheck.ok ? 0.5 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </Modal>
   );
