@@ -1,0 +1,36 @@
+{
+  "name": "ltc-tests",
+  "private": true,
+  "description": "Automated tests for the LTC Lab Inventory app. Synthetic data only; separate from the app's own dependencies so the Vercel build is unaffected.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node run.mjs unit ui",
+    "test:unit": "node run.mjs unit",
+    "test:ui": "node run.mjs ui",
+    "test:pg": "node run.mjs pg",
+    "test:all": "node run.mjs unit ui pg"
+  },
+  "devDependencies": {
+    "embedded-postgres-15": "npm:embedded-postgres@15.18.0-beta.17",
+    "embedded-postgres-17": "npm:embedded-postgres@17.10.0-beta.17",
+    "esbuild": "0.28.2",
+    "jsdom": "24.1.3",
+    "pg": "8.23.1"
+  },
+  "allowScripts": {
+    "@embedded-postgres/darwin-arm64@15.18.0-beta.17": true,
+    "@embedded-postgres/darwin-arm64@17.10.0-beta.17": true,
+    "@embedded-postgres/darwin-x64@15.18.0-beta.17": true,
+    "@embedded-postgres/darwin-x64@17.10.0-beta.17": true,
+    "@embedded-postgres/linux-arm64@15.18.0-beta.17": true,
+    "@embedded-postgres/linux-arm64@17.10.0-beta.17": true,
+    "@embedded-postgres/linux-x64@15.18.0-beta.17": true,
+    "@embedded-postgres/linux-x64@17.10.0-beta.17": true,
+    "@embedded-postgres/windows-x64@15.18.0-beta.17": true,
+    "@embedded-postgres/windows-x64@17.10.0-beta.17": true,
+    "esbuild@0.28.2": true
+  }
+}

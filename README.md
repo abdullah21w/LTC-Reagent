@@ -71,3 +71,6 @@ Vercel → Project → Settings → Domains → أضف الدومين اللي �
 2. تأكد إن فيه بالضبط: `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` (نفس الاسم بالضبط، حساس لحالة الأحرف)
 3. القيم مأخوذة من Supabase → Project Settings → Data API (الـ URL) و API Keys (الـ Publishable key)
 4. بعد أي تعديل على Environment Variables، لازم تعمل **Redeploy** يدوي (مو بس حفظ) عشان تنطبق
+
+## Automated tests
+Synthetic data only — see [tests/README.md](tests/README.md) for prerequisites and commands (`npm run test:setup`, `npm test`, `npm run test:pg`).
