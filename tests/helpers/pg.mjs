@@ -151,7 +151,7 @@ export async function dumpAll(c, { without = [] } = {}) {
 }
 
 /**
- * Supabase-client subset used by lotEdit.saveLotEdit (from(t).update().eq().is().select()),
+ * Supabase-client subset used by lotEdit.saveLotEdit and receiveSave.saveReceipt (from(t).update()/insert().eq().is().select()),
  * executed as SQL on a pg connection — one UPDATE … WHERE … RETURNING, like PostgREST.
  */
 export function pgClient(conn) {
@@ -160,6 +160,11 @@ export function pgClient(conn) {
     const params = [];
     const where = st.filters.map(([f, op, v]) => (op === "is" ? `${qi(f)} is null` : (params.push(v), `${qi(f)} = $${params.length}`))).join(" and ");
     try {
+      if (st.op === "insert") {
+        const cols = Object.keys(st.values);
+        const r = await conn.query(`insert into ${st.table} (${cols.map(qi).join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")}) returning ${st.cols || "id"}`, cols.map((k) => st.values[k]));
+        return { data: r.rows, error: null };
+      }
       if (st.op === "update") {
         const sets = Object.entries(st.values).map(([k, v]) => (params.push(v), `${qi(k)} = $${params.length}`));
         const r = await conn.query(`update ${st.table} set ${sets.join(", ")} where ${where} returning ${st.cols || "id"}`, params);
@@ -173,6 +178,7 @@ export function pgClient(conn) {
     const st = { table, op: "select", values: null, filters: [], cols: null };
     const b = {
       update(v) { st.op = "update"; st.values = v; return b; },
+      insert(v) { st.op = "insert"; st.values = v; return b; },
       eq(f, v) { st.filters.push([f, "=", v]); return b; },
       is(f, v) { st.filters.push([f, "is", v]); return b; },
       select(cols) { st.cols = cols; return b; },

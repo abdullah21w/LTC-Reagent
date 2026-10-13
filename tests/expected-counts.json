@@ -1,29 +1,78 @@
 {
   "_about": "Every test suite and the exact number of checks it must run. The count reporter (helpers/count-reporter.mjs) fails the run if a suite is missing, unexpected, or runs a different number of checks. PostgreSQL suites run once per version in TEST_PG_VERSIONS (default 15,17); {v} is the version. Update this file deliberately when a suite gains or loses checks.",
   "unit": {
-    "unit/units.test.mjs": { "U1 · unit engine (units.js)": 109 },
-    "unit/lotEdit.test.mjs": { "U0 · U2c-1 · U2c-2 · Edit Lot rules and save path (lotEdit.js)": 125 },
-    "unit/forecast.test.mjs": { "U2b · unit-safe aggregation and evidence (forecast.js)": 29 },
-    "unit/evidence.test.mjs": { "Batch E · reconciliation evidence rules (reconciliationEvidence.js)": 49 }
+    "unit/units.test.mjs": {
+      "U1 · unit engine (units.js)": 109
+    },
+    "unit/lotEdit.test.mjs": {
+      "U0 · U2c-1 · U2c-2 · Edit Lot rules and save path (lotEdit.js)": 125
+    },
+    "unit/forecast.test.mjs": {
+      "U2b · unit-safe aggregation and evidence (forecast.js)": 29
+    },
+    "unit/evidence.test.mjs": {
+      "Batch E · reconciliation evidence rules (reconciliationEvidence.js)": 49
+    },
+    "unit/receiveSave.test.mjs": {
+      "U2d-1 · Receive save path (receiveSave.js)": 30
+    }
   },
   "ui": {
-    "ui/editLot.test.mjs": { "U0 · U2c-1 · U2c-2 · Edit Lot window": 51 },
-    "ui/logUse.test.mjs": { "U2c-3 · Log use window": 25 },
-    "ui/screens.test.mjs": { "U2b · stock screens, reports and PDFs": 48 }
+    "ui/editLot.test.mjs": {
+      "U0 · U2c-1 · U2c-2 · Edit Lot window": 51
+    },
+    "ui/logUse.test.mjs": {
+      "U2c-3 · Log use window": 25
+    },
+    "ui/screens.test.mjs": {
+      "U2b · stock screens, reports and PDFs": 48
+    },
+    "ui/receive.test.mjs": {
+      "U2d-1 · Receive window save behaviour": 27
+    }
   },
   "pg": {
-    "pg/packaging.test.mjs": { "U2a · packaging schema, guards and rollback (PostgreSQL {v})": 55 },
-    "pg/editLotSave.test.mjs": { "U2c-1 · U2c-2 · Edit Lot save path (PostgreSQL {v})": 42 },
-    "pg/probes.test.mjs": { "Probes · read-only GET probes write nothing (PostgreSQL {v})": 5 },
-    "pg/scopeRule.test.mjs": { "Scope rule · one open Stock Count per department / Whole lab (PostgreSQL {v})": 119 },
-    "pg/evidenceFoundation.test.mjs": { "Batch A · Evidence Foundation and Batch A guard (PostgreSQL {v})": 51 },
-    "pg/b1Replay.test.mjs": { "B1 · recorded Stock Count client writes replayed (PostgreSQL {v})": 106 },
-    "pg/stockCountFunctions.test.mjs": { "B1.5a · atomic Stock Count functions (PostgreSQL {v})": 459 },
-    "pg/evidenceGuardCompat.test.mjs": { "B2 · Evidence Guard rules and rollout compatibility matrix (PostgreSQL {v})": 40 },
-    "pg/stockCountStart.test.mjs": { "Batch C · atomic Stock Count start (PostgreSQL {v})": 50 },
-    "pg/manualSpread.test.mjs": { "manual_spread · provenance CHECK fresh + upgrade, guard compatibility (PostgreSQL {v})": 11 },
-    "pg/historicalBackfill.test.mjs": { "Batch D · historical evidence backfill (PostgreSQL {v})": 43 },
-    "pg/readiness.test.mjs": { "Batch E · readiness check and validator parity (PostgreSQL {v})": 17 },
-    "pg/businessFingerprint.test.mjs": { "Business fingerprint · stable through the rollout, detects every mutation (PostgreSQL {v})": 26 }
+    "pg/packaging.test.mjs": {
+      "U2a · packaging schema, guards and rollback (PostgreSQL {v})": 55
+    },
+    "pg/editLotSave.test.mjs": {
+      "U2c-1 · U2c-2 · Edit Lot save path (PostgreSQL {v})": 42
+    },
+    "pg/probes.test.mjs": {
+      "Probes · read-only GET probes write nothing (PostgreSQL {v})": 5
+    },
+    "pg/scopeRule.test.mjs": {
+      "Scope rule · one open Stock Count per department / Whole lab (PostgreSQL {v})": 119
+    },
+    "pg/evidenceFoundation.test.mjs": {
+      "Batch A · Evidence Foundation and Batch A guard (PostgreSQL {v})": 51
+    },
+    "pg/b1Replay.test.mjs": {
+      "B1 · recorded Stock Count client writes replayed (PostgreSQL {v})": 106
+    },
+    "pg/stockCountFunctions.test.mjs": {
+      "B1.5a · atomic Stock Count functions (PostgreSQL {v})": 459
+    },
+    "pg/evidenceGuardCompat.test.mjs": {
+      "B2 · Evidence Guard rules and rollout compatibility matrix (PostgreSQL {v})": 40
+    },
+    "pg/stockCountStart.test.mjs": {
+      "Batch C · atomic Stock Count start (PostgreSQL {v})": 50
+    },
+    "pg/manualSpread.test.mjs": {
+      "manual_spread · provenance CHECK fresh + upgrade, guard compatibility (PostgreSQL {v})": 11
+    },
+    "pg/historicalBackfill.test.mjs": {
+      "Batch D · historical evidence backfill (PostgreSQL {v})": 43
+    },
+    "pg/readiness.test.mjs": {
+      "Batch E · readiness check and validator parity (PostgreSQL {v})": 17
+    },
+    "pg/businessFingerprint.test.mjs": {
+      "Business fingerprint · stable through the rollout, detects every mutation (PostgreSQL {v})": 26
+    },
+    "pg/receiveSave.test.mjs": {
+      "U2d-1 · Receive save path (PostgreSQL {v})": 26
+    }
   }
 }

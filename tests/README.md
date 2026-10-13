@@ -74,8 +74,8 @@ number of checks than listed, is not listed, or failed — or if the summary its
 could not be produced. The same summary is written to `tests/.cache/last-run.json`.
 
 Node's runner prints its own "tests" figure, which counts each suite once **plus**
-each of its checks: that figure is always checks + suites (e.g. 436 checks in 7
-suites → 443). Reports should quote the checks.
+each of its checks: that figure is always checks + suites (e.g. 493 checks in 9
+suites → 502). Reports should quote the checks.
 
 ## What is covered
 
@@ -89,6 +89,8 @@ suites → 443). Reports should quote the checks.
 | Reconciliation evidence | `unit/evidence.test.mjs` | 49 | Batch E classification of every provenance value, discrepancy, allocation vs physical shortage, validator errors vs historical warnings, readiness status |
 | Edit Lot window | `ui/editLot.test.mjs` | 51 | real component: errors keep the window open, one save per tap, package-name controls, lock panel on Lots with history |
 | Log use window | `ui/logUse.test.mjs` | 25 | U2c-3 display wording; the saved amount is exactly what was typed |
+| Receive save (U2d-1) | `unit/receiveSave.test.mjs` | 30 | the row Receive writes (unchanged columns + receipt id); saved / recovered after a lost response / already saved (primary key) / mismatch on any identity field (never a success) / refused / permission / not confirmed / unknown / zero rows; messages never claim a failure they can't prove and keep the user in the same window; activity entry at most once per receipt, a failed one is never hidden |
+| Receive window | `ui/receive.test.mjs` | 27 | a refused or unconfirmed save keeps the window and every entry; one request per tap burst; retries reuse the receipt id; quantity semantics unchanged; after an unknown / not-confirmed result, Close asks before leaving — the confirmation is brought into view and focused (Stay keeps the entries and receipt id, Leave exits only on that choice); a confirmed refusal or success closes normally |
 | Stock screens | `ui/screens.test.mjs` | 48 | U2b Charts, History, Detail, Dashboard, Reorder, Public summary, PDF report, monthly report (network mocked) |
 
 ### PostgreSQL (`npm run test:pg`, each suite on 15 and 17)
@@ -108,8 +110,9 @@ suites → 443). Reports should quote the checks.
 | Readiness | `pg/readiness.test.mjs` | 17 | Batch E READINESS_CHECK.sql read-only at each rollout stage and after a full new count; parity with the JS validator |
 | Business fingerprint | `pg/businessFingerprint.test.mjs` | 26 | business values unchanged through every rollout stage; time-zone independent; blind to evidence columns; detects a change to any protected value |
 | Probes | `pg/probes.test.mjs` | 5 | runbook GET probes are write-free |
+| Receive save | `pg/receiveSave.test.mjs` | 26 | U2d-1 on the real database: the schema accepts a client-supplied Lot id (uuid primary key, column grant, row-level security, no insert trigger, no migration redefining it); confirmed insert + activity entry; repeat after confirmation (no 2nd entry); not-null / privilege / row-level-security refusals; network failure before the request; response lost after commit; check failing too; a LATE commit after the check found nothing; retry after a change; two sessions sharing one receipt (one Lot); activity entry refused |
 
-Totals: **436** unit/UI checks; **1,024** PostgreSQL checks per version (**2,048** for 15 + 17); **2,484** in all.
+Totals: **493** unit/UI checks in 9 suites; **1,050** PostgreSQL checks per version in 14 suites (**2,100** for 15 + 17); **2,593** checks in 37 suites in all.
 
 ## Coverage matrix — original review suites → this harness
 

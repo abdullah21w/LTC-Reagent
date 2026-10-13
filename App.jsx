@@ -12,6 +12,7 @@ import StockCount from "./StockCount";
 import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
 import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit, hasHistory } from "./lotEdit";
+import { saveReceipt } from "./receiveSave";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
@@ -330,32 +331,19 @@ export default function App() {
     return null;
   }
 
+  // U2d-1: the receipt is saved through receiveSave.saveReceipt — one confirmed Lot per
+  // receipt (idempotent by receipt id), activity entry only after the save is confirmed.
+  // The Receive window closes only on a confirmed save; otherwise it stays open with
+  // the entries kept and the returned message shown.
   async function addReagent(entry) {
-    if (!can("receive")) return;
-    await supabase.from("reagents").insert({
-      name: (entry.name || "").replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, "").trim(),
-      department: entry.department,
-      item_type: entry.itemType,
-      device: entry.device || "",
-      lot_number: entry.lotNumber,
-      unit: entry.unit,
-      quantity_received: entry.quantityReceived,
-      current_quantity: entry.quantityReceived,
-      expiry_date: entry.expiryDate || null,
-      date_added: entry.receivedDate,
-      added_by: entry.receivedBy,
-      low_stock_threshold: entry.lowStockThreshold,
-      units_per_carton: entry.unitsPerCarton || null,
-      intact_container: entry.intact_container,
-      complete_compound: entry.complete_compound,
-      expiration_validity: entry.expiration_validity,
-      lot_matches_kit: entry.lot_matches_kit,
-      storage_condition_ok: entry.storage_condition_ok,
-      receiving_notes: entry.receivingNotes,
-      inspection_notes: entry.inspectionNotes,
-    });
-    setShowWizard(false);
-    loadAll();
+    if (!can("receive")) return { ok: false, message: "You don't have permission to receive stock, so nothing was saved." };
+    const result = await saveReceipt({ client: supabase, entry, logActivity });
+    if (result.ok) {
+      setShowWizard(false);
+      loadAll();
+      if (result.auditLogged === false) alert(result.warning);
+    }
+    return result;
   }
 
   async function recordConsumption(entry) {
@@ -3277,6 +3265,7 @@ function Reports({ reagents, logs, departments, role, can, onDeleteReagent, onRe
 
 function DeletionsLog({ activityLog, onClear }) {
   const ACTION_META = {
+    receive: { label: "Received", color: "#2F6B4F", bg: "#E8F2EC" },
     edit: { label: "Edited", color: "#B8860B", bg: "#FBF3DF" },
     delete: { label: "Removed", color: "#C1432B", bg: "#FBEAE6" },
     discard: { label: "Discarded", color: "#8A5A2B", bg: "#FBF0E4" },
@@ -3294,7 +3283,7 @@ function DeletionsLog({ activityLog, onClear }) {
           </button>
         )}
       </div>
-      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 24 }}>Every login, edit, removal, and permanent erase — in order, newest first. Only visible to your account.</div>
+      <div style={{ fontSize: 13, color: "#7B8E8A", marginBottom: 24 }}>Every login, receipt, edit, removal, and permanent erase — in order, newest first. Only visible to your account.</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {activityLog.length === 0 && <div style={{ fontSize: 13, color: "#8A9694" }}>No activity recorded yet.</div>}
