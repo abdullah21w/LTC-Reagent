@@ -106,7 +106,9 @@ export async function startPostgres(version, { flags = [] } = {}) {
 // The repository's schema files, applied the way Production has them.
 export const CHAIN = ["ADD_INVENTORY_COUNTS.sql", "ADD_COUNT_LOG_LINKS.sql", "ADD_ONE_OPEN_COUNT_PER_SCOPE.sql", "ADD_EVIDENCE_FOUNDATION.sql", "ADD_ATOMIC_STOCK_COUNT_FUNCTIONS.sql", "ADD_STOCK_COUNT_START.sql", "ADD_EVIDENCE_GUARD.sql"];
 export const U2A = ["ADD_PACKAGING_FOUNDATION.sql", "ADD_STOCK_COUNT_START_V2.sql", "ADD_PACKAGING_GUARDS.sql"];
-const SKIP = new Set([...CHAIN, ...U2A, "ADD_HISTORICAL_EVIDENCE_BACKFILL.sql"]);
+// Applied by the suites that test them, in Production order (after U2a).
+export const LOG_USE = ["ADD_ATOMIC_LOG_USE.sql"];
+const SKIP = new Set([...CHAIN, ...U2A, ...LOG_USE, "ADD_HISTORICAL_EVIDENCE_BACKFILL.sql"]);
 
 /**
  * Builds the pre-U2a schema: supabase_schema.sql, the older ADD_*.sql files
@@ -130,6 +132,7 @@ export async function buildBaseSchema(c) {
   return skipped;
 }
 export async function applyU2a(c) { for (const f of U2A) await c.query(readRoot(f)); }
+export async function applyLogUse(c) { for (const f of LOG_USE) await c.query(readRoot(f)); }
 
 /** Runs `sql`; returns null on success or "message/detail" on error (never throws). Inside inTx each statement gets a savepoint. */
 export async function err(c, sql, params) {

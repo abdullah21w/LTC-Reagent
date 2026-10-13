@@ -2,7 +2,7 @@
   "_about": "Every test suite and the exact number of checks it must run. The count reporter (helpers/count-reporter.mjs) fails the run if a suite is missing, unexpected, or runs a different number of checks. PostgreSQL suites run once per version in TEST_PG_VERSIONS (default 15,17); {v} is the version. Update this file deliberately when a suite gains or loses checks.",
   "unit": {
     "unit/units.test.mjs": {
-      "U1 · unit engine (units.js)": 111
+      "U1 · unit engine (units.js)": 112
     },
     "unit/lotEdit.test.mjs": {
       "U0 · U2c-1 · U2c-2 · Edit Lot rules and save path (lotEdit.js)": 125
@@ -21,6 +21,9 @@
     },
     "unit/countEntry.test.mjs": {
       "Stock Count package + loose entry (countEntry.js)": 32
+    },
+    "unit/logUseSave.test.mjs": {
+      "Atomic Log Use · save path (logUseSave.js)": 23
     }
   },
   "ui": {
@@ -41,6 +44,9 @@
     },
     "ui/stockCountEntry.test.mjs": {
       "Stock Count window: package + loose entry": 35
+    },
+    "ui/logUseSave.test.mjs": {
+      "Atomic Log Use · Log use window": 22
     }
   },
   "pg": {
@@ -91,6 +97,9 @@
     },
     "pg/countEntry.test.mjs": {
       "Stock Count package + loose entry (PostgreSQL {v})": 15
+    },
+    "pg/logUse.test.mjs": {
+      "Atomic Log Use (PostgreSQL {v})": 33
     }
   }
 }

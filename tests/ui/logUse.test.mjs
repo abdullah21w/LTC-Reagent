@@ -46,7 +46,7 @@ check("named: exactly one package → singular '1 box'", hint().endsWith("5 piec
 await type(amountInput(), "7");
 await click([...host.querySelectorAll("button")].find((b) => b.textContent === "Save log"));
 check("saved payload: amount is the typed number in the lot's unit (no ×5, no ÷5)", (({ reagentId, amount, usedBy, note, testedByQC, replaceOnDevice, confirmLotToLotId }) => ({ reagentId, amount, usedBy, note, testedByQC, replaceOnDevice, confirmLotToLotId }))(submitted.at(-1) || {}), { reagentId: "x", amount: 7, usedBy: "tester", note: "", testedByQC: false, replaceOnDevice: true, confirmLotToLotId: null });
-check("saved payload has exactly these keys", Object.keys(submitted.at(-1) || {}), ["reagentId", "amount", "date", "usedBy", "note", "testedByQC", "replaceOnDevice", "confirmLotToLotId"]);
+check("saved payload has exactly these keys (Atomic Log Use: + logId, the reference that makes retries safe)", Object.keys(submitted.at(-1) || {}), ["logId", "reagentId", "amount", "date", "usedBy", "note", "testedByQC", "replaceOnDevice", "confirmLotToLotId"]);
 await close();
 
 // 2. Singular / plural
@@ -105,7 +105,7 @@ const m = app.slice(app.indexOf("function LogConsumptionModal("), app.indexOf("f
 check("old wording gone from the window ('/box)', 'full box', 'remaining', formatCartonQty)", [/\/box\)/.test(m), /full box/.test(m), /remaining/.test(m), /formatCartonQty/.test(app)], [false, false, false, false]);
 const helpers = app.slice(app.indexOf("const qtyInUnit = "), app.indexOf("// U2b — quantity displays"));
 check("Log use display helpers do no arithmetic on stored quantities and touch no database", [/(current_quantity|quantity_received|units_per_carton)\s*[-+*/]|[-+*/]\s*\w+\.(current_quantity|units_per_carton)/.test(helpers), /supabase|\.(insert|update|delete|rpc)\(/.test(helpers), helpers.length > 200], [false, false, true]);
-check("the amount input keeps the typed text (value/onChange), converted only by Number() at submit", [m.includes('value={amount} onChange={(e) => setAmount(e.target.value)}'), /amount: Number\(amount\)/.test(m)], [true, true]);
+check("the amount input keeps the typed text (value/onChange); at submit it is checked as text (checkUseAmount, never rounded) and that value is sent", [m.includes('value={amount} onChange={(e) => { setAmount(e.target.value); setSaveError(null); }}'), /const chk = checkUseAmount\(amount, chosenLot\);/.test(m), /amount: chk\.value/.test(m)], [true, true, true]);
 check("the window writes nothing to the database itself", globalThis.__writes || [], []);
 check("no React errors", env.errors, []);
 env.close();

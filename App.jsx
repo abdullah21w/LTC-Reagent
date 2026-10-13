@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Beaker, TrendingDown, Plus, Users, FileText, LayoutGrid, ChevronRight, ChevronLeft, X, Droplet, ScanLine, Pencil, Trash2, Bell, LogOut, SlidersHorizontal, Download, AlertTriangle, ClipboardX, History, BarChart3, KeyRound, Menu, Cpu, Clock, Moon, Sun, Archive, Ban, CalendarDays, ShoppingCart, Printer, CheckCircle2, ClipboardCheck } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer, Tooltip, CartesianGrid, XAxis, YAxis } from "recharts";
 import { supabase } from "./supabaseClient";
@@ -13,6 +13,7 @@ import { buildSpreadEntries } from "./logSpread";
 import { isCountDerivedLog, isReservedUsedBy, COUNT_LOG_LOCKED_MSG } from "./countEvidence";
 import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit, hasHistory } from "./lotEdit";
 import { saveReceipt } from "./receiveSave";
+import { saveLogUse, newLogId, checkUseAmount } from "./logUseSave";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
@@ -351,75 +352,26 @@ export default function App() {
     return supabase.from("reagents").select("id, name, lot_number, department, device, unit, units_per_carton, pack_unit, quantity_received, current_quantity, date_added, added_by, deleted").eq("lot_number", lotNumber);
   }
 
+  // Atomic Log Use (logUseSave.js → database function log_use, ADD_ATOMIC_LOG_USE.sql):
+  // the usage log, the stock deduction and what follows from it (auto-remove of a
+  // depleted Lot with its activity entry, device activation, Lot-to-Lot) are ONE
+  // database transaction, deducted from the locked Lot row — never from the quantity
+  // this browser loaded. The window closes only on a confirmed save; otherwise it
+  // stays open with the entries kept and the returned message shown.
   async function recordConsumption(entry) {
-    if (!can("log_use")) return;
-    // Checked before anything is written: the Stock Count user name is reserved.
-    if (isReservedUsedBy(entry.usedBy)) { alert(`"${entry.usedBy}" is reserved for stock-count corrections, so this use wasn't logged.`); return; }
+    if (!can("log_use")) return { ok: false, outcome: "rejected", message: "You don't have permission to log use, so nothing was recorded." };
+    // Checked before anything is sent: the Stock Count user name is reserved.
+    if (isReservedUsedBy(entry.usedBy)) return { ok: false, outcome: "rejected", message: `"${entry.usedBy}" is reserved for stock-count corrections, so this use wasn't logged.` };
     const item = reagents.find((r) => r.id === entry.reagentId);
-    if (!item) return;
-    const newQty = Math.max(0, item.current_quantity - entry.amount);
-
-    const updatePayload = { current_quantity: newQty };
-    if (newQty <= 0) {
-      const hasAlternative = reagents.some((r) => r.id !== item.id && r.name === item.name && (r.device || "") === (item.device || "") && !r.deleted && r.current_quantity > 0);
-      if (hasAlternative) {
-        updatePayload.deleted = true;
-        updatePayload.deleted_by = "Auto (lot depleted, alternate lot available)";
-        updatePayload.deleted_at = new Date().toISOString();
-      }
+    if (!item) return { ok: false, outcome: "rejected", message: "This Lot is no longer in the list. Nothing was recorded. Close this window and choose another Lot." };
+    const result = await saveLogUse({ client: supabase, entry: { ...entry, unit: item.unit, lotToLot: needsLotToLot(item.device) }, actor: username });
+    if (result.ok) {
+      setShowLog(false);
+      loadAll();
+      if (result.lotToLotFlagged) setLotToLotNotice(`Lot ${item.lot_number} of ${item.name} just ran out on ${item.device}. A Lot-to-Lot verification will be required before the next lot is used.`);
+      if (result.outcome === "already_saved" && result.logDeleted) alert("This use had already been recorded from this window and has since been undone. Nothing new was recorded.");
     }
-    await supabase.from("reagents").update(updatePayload).eq("id", item.id);
-    if (updatePayload.deleted) {
-      await logActivity("delete", "reagent", `${item.name} — Lot ${item.lot_number} (auto-removed, depleted)`, "System");
-    }
-    let activeDeviceChanged = false;
-    let previousActiveLotId = null;
-    if (item.device && !item.active_on_device) {
-      activeDeviceChanged = true;
-      if (entry.replaceOnDevice) {
-        const prevActive = reagents.find((r) => r.id !== item.id && r.name === item.name && r.device === item.device && !r.deleted && r.active_on_device);
-        previousActiveLotId = prevActive ? prevActive.id : null;
-      }
-    }
-
-    await supabase.from("consumption_logs").insert({
-      reagent_id: entry.reagentId, amount: entry.amount, date: entry.date, used_by: entry.usedBy, note: entry.note, tested_by_qc: entry.testedByQC,
-      active_device_changed: activeDeviceChanged, previous_active_lot_id: previousActiveLotId,
-      date_provenance: "manual", // the person logging chose this date (needs ADD_EVIDENCE_FOUNDATION.sql)
-    });
-    if (item.device) {
-      if (entry.replaceOnDevice) {
-        const siblings = reagents.filter((r) => r.name === item.name && r.device === item.device && r.id !== item.id && !r.deleted && r.active_on_device);
-        for (const s of siblings) {
-          await supabase.from("reagents").update({ active_on_device: false }).eq("id", s.id);
-        }
-      }
-      if (!item.active_on_device) {
-        await supabase.from("reagents").update({ active_on_device: true }).eq("id", item.id);
-      }
-    }
-
-    if (needsLotToLot(item.device)) {
-      // Step 2: mark today's Lot-to-Lot check as done, if this submission was confirming one.
-      if (entry.confirmLotToLotId) {
-        await supabase.from("lot_to_lot_pending").update({ confirmed: true, confirmed_by: username, confirmed_at: new Date().toISOString() }).eq("id", entry.confirmLotToLotId);
-      }
-      // Step 1: this lot just ran out — if another lot of the same reagent is
-      // waiting on this device, flag that the next use needs Lot-to-Lot verification.
-      if (newQty <= 0) {
-        const otherLotAvailable = reagents.some((r) => r.id !== item.id && r.name === item.name && r.device === item.device && !r.deleted && r.current_quantity > 0);
-        if (otherLotAvailable) {
-          await supabase.from("lot_to_lot_pending").upsert(
-            { reagent_name: item.name, device: item.device, depleted_lot_number: item.lot_number, confirmed: false, confirmed_by: null, confirmed_at: null, created_at: new Date().toISOString() },
-            { onConflict: "reagent_name,device" }
-          );
-          setLotToLotNotice(`Lot ${item.lot_number} of ${item.name} just ran out on ${item.device}. A Lot-to-Lot verification will be required before the next lot is used.`);
-        }
-      }
-    }
-
-    setShowLog(false);
-    loadAll();
+    return result;
   }
 
   // Edit Lot save (lotEdit.js saveLotEdit): only changed fields are written, and
@@ -3384,13 +3336,47 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
     setShowScanner(false);
   }
 
+  // Atomic Log Use: one reference id per window, reused for every attempt, so a
+  // retry can never record this use twice (logUseSave.js). The window stays open
+  // with every entry kept until the save is confirmed.
+  const [logId] = useState(() => newLogId());
   const [submitting, setSubmitting] = useState(false);
-  function submit() {
-    if (!chosenLot || !amount || !usedBy) return;
+  const inFlight = useRef(false);
+  const [saveError, setSaveError] = useState(null);
+  const [uncertain, setUncertain] = useState(false); // the last attempt got no confirmed answer
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const leaveRef = useRef(null), stayRef = useRef(null);
+  useEffect(() => {
+    if (!confirmLeave) return;
+    leaveRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    stayRef.current?.focus?.();
+  }, [confirmLeave]);
+  const amountCheck = chosenLot ? checkUseAmount(amount, chosenLot) : null;
+  function requestClose() {
+    if (uncertain) setConfirmLeave(true);
+    else onClose();
+  }
+  async function submit() {
+    if (!chosenLot || !usedBy) return;
     if (pendingLtl && !ltlConfirmed) return;
-    if (submitting) return;
+    if (inFlight.current) return;
+    const chk = checkUseAmount(amount, chosenLot);
+    if (!chk.ok) { setSaveError(chk.error); return; }
+    inFlight.current = true;
     setSubmitting(true);
-    onSubmit({ reagentId: chosenLot.id, amount: Number(amount), date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
+    setSaveError(null);
+    setConfirmLeave(false);
+    let result;
+    try {
+      result = await onSubmit({ logId, reagentId: chosenLot.id, amount: chk.value, date, usedBy, note, testedByQC, replaceOnDevice: showReplaceChoice ? replaceOnDevice : true, confirmLotToLotId: pendingLtl ? pendingLtl.id : null });
+    } catch {
+      result = { ok: false, outcome: "unknown", message: "Something went wrong while saving, so it isn't known whether this use was recorded. Your entries are kept. Keep this window open and press \"Save log\" again — in this same window it is safe: this use can only ever be recorded once." };
+    }
+    inFlight.current = false;
+    setSubmitting(false);
+    if (!result || result.ok) return; // confirmed: the parent closes the window
+    setSaveError(result.message || "This use wasn't recorded.");
+    setUncertain(result.outcome === "unknown" || result.outcome === "not_confirmed");
   }
 
   if (reagents.length === 0) {
@@ -3398,7 +3384,7 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
   }
 
   return (
-    <Modal title="Log daily consumption" onClose={onClose}>
+    <Modal title="Log daily consumption" onClose={requestClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <label style={labelStyle}>Type
           <select style={inputStyle} value={typeFilter} onChange={(e) => changeType(e.target.value)}>
@@ -3493,7 +3479,7 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
           </div>
         )}
         <div style={{ display: "flex", gap: 10 }}>
-          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({unitLabel(chosenLot?.unit, 2)})<input type="number" style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label style={{ ...labelStyle, flex: 1 }}>Amount used ({unitLabel(chosenLot?.unit, 2)})<input type="number" inputMode="decimal" style={inputStyle} value={amount} onChange={(e) => { setAmount(e.target.value); setSaveError(null); }} /></label>
           <label style={{ ...labelStyle, flex: 1 }}>Date<input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
         {(() => {
@@ -3515,7 +3501,20 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
         </label>
         <label style={labelStyle}>Note (optional)<input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. daily QC run" /></label>
         <YesNoRow label="Tested by QC" value={testedByQC} onChange={setTestedByQC} />
-        <button onClick={submit} disabled={!chosenLot || (pendingLtl && !ltlConfirmed) || submitting} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!chosenLot || (pendingLtl && !ltlConfirmed) || submitting) ? 0.5 : 1 }}>{submitting ? "Saving…" : "Save log"}</button>
+        {amount !== "" && amountCheck && !amountCheck.ok && !saveError && <div role="alert" data-testid="log-amount-error" style={{ fontSize: 12.5, color: "#A33A26" }}>{amountCheck.error}</div>}
+        {saveError && <div role="alert" data-testid="log-save-error" style={{ fontSize: 12.5, color: "#A33A26", background: "#FDF1EF", border: "1px solid #F5C2BB", borderRadius: 7, padding: "8px 10px" }}>{saveError}</div>}
+        <button onClick={submit} disabled={!chosenLot || (pendingLtl && !ltlConfirmed) || submitting || !amountCheck?.ok} style={{ marginTop: 6, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, opacity: (!chosenLot || (pendingLtl && !ltlConfirmed) || submitting || !amountCheck?.ok) ? 0.5 : 1 }}>{submitting ? "Saving…" : "Save log"}</button>
+        {confirmLeave && (
+          <div ref={leaveRef} role="alertdialog" aria-label="Leave this use?" style={{ background: "#FFF7ED", border: "1px solid #FDBA74", borderRadius: 8, padding: "12px 14px", fontSize: 12.5, color: "#7C3E00" }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>This use may already have been recorded.</div>
+            <div>The last attempt didn't get a confirmed answer from the database. If you close this window and log the same use again, the new window uses a different reference, so the use could be recorded — and deducted — twice.</div>
+            <div style={{ marginTop: 6 }}>The safest choice is to stay here and press "Save log" again — this window can only ever record this use once.</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button ref={stayRef} type="button" onClick={() => setConfirmLeave(false)} style={{ flex: 2, background: "#0F7173", color: "#fff", border: "none", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 13 }}>Stay in this window</button>
+              <button type="button" onClick={onClose} style={{ flex: 1, background: "#fff", color: "#A33A26", border: "1px solid #F5C2BB", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 13 }}>Leave anyway</button>
+            </div>
+          </div>
+        )}
       </div>
       {showScanner && <BarcodeScanner onClose={() => setShowScanner(false)} onDetected={handleScan} />}
     </Modal>
