@@ -18,9 +18,12 @@ const open = async () => { calls.length = 0; await U.mount(A.createElement(A.Rec
 const fill = async ({ packaging = false } = {}) => {
   await U.type(U.inputByLabel("Item (type to search)"), "Reagent R");
   await U.type(U.inputByLabel("Lot number"), "TR-001");
+  // U2d-2: the base unit is chosen explicitly (no default); packaging uses its own controls
+  await U.click(btn("bottle"));
   if (packaging) {
-    await U.click([...U.host.querySelectorAll("label")].find((l) => /This item comes in boxes/.test(l.textContent)).querySelector("input"));
-    await U.type(U.inputByLabel("mL per box"), "6");
+    await U.click(btn("Packaged (box, carton, kit …)"));
+    await U.click(btn("Box"));
+    await U.type(U.inputByLabel("Bottles per box"), "6");
     await U.type(U.inputByLabel("Boxes received"), "3");
   } else await U.type(U.inputByLabel("Quantity received"), "12");
   await U.click(btn("Next: Inspection"));
@@ -39,7 +42,7 @@ await U.click(btn("Next: Inspection"));
 next = { ok: true, outcome: "saved" };
 await U.click(btn("Add to inventory"));
 check("retry sends the SAME receipt id; it is a v4 UUID", [calls.length, calls[1].receiptId === calls[0].receiptId, /^[0-9a-f]{8}-[0-9a-f]{4}-4/.test(calls[0].receiptId)], [2, true, true]);
-check("payload quantity and fields exactly as Receive always sent them", (({ name, lotNumber, quantityReceived, unitsPerCarton, unit, lowStockThreshold, receivedBy }) => ({ name, lotNumber, quantityReceived, unitsPerCarton, unit, lowStockThreshold, receivedBy }))(calls[1]), { name: "Reagent R", lotNumber: "TR-001", quantityReceived: 12, unitsPerCarton: null, unit: "mL", lowStockThreshold: 5, receivedBy: "tester" });
+check("payload: the entered values; quantity in the chosen base unit (no mL default since U2d-2), no packaging", (({ name, lotNumber, quantityReceived, unitsPerCarton, packUnit, unit, lowStockThreshold, receivedBy }) => ({ name, lotNumber, quantityReceived, unitsPerCarton, packUnit, unit, lowStockThreshold, receivedBy }))(calls[1]), { name: "Reagent R", lotNumber: "TR-001", quantityReceived: 12, unitsPerCarton: null, packUnit: null, unit: "bottle", lowStockThreshold: 5, receivedBy: "tester" });
 check("success: no error shown; the window does not close itself (the parent closes it)", [alertText(), closed], [null, 0]);
 await U.unmount();
 
@@ -65,7 +68,7 @@ await U.unmount();
 await open(); await fill({ packaging: true });
 next = { ok: true };
 await U.click(btn("Add to inventory"));
-check("packaging: quantity = boxes × units per box (3 × 6 = 18), box size sent, as before", [calls[0].quantityReceived, calls[0].unitsPerCarton], [18, 6]);
+check("packaging: quantity = packages × units per package (3 × 6 = 18), size and package name sent", [calls[0].quantityReceived, calls[0].unitsPerCarton, calls[0].packUnit], [18, 6, "box"]);
 await U.unmount();
 
 // 6. Exit guard after an uncertain result
@@ -140,7 +143,7 @@ await U.unmount();
 const app = readSource("App.jsx"), wiz = readSource("ReceiveWizard.jsx");
 const add = app.slice(app.indexOf("async function addReagent("), app.indexOf("async function recordConsumption("));
 check("App.addReagent: saves through saveReceipt; closes and reloads only when result.ok; warns when the activity entry failed; no direct insert", [add.includes("saveReceipt({ client: supabase, entry, logActivity })"), /if \(result\.ok\) \{\s*setShowWizard\(false\);\s*loadAll\(\);\s*if \(result\.auditLogged === false\) alert\(result\.warning\);\s*\}/.test(add), /\.insert\(/.test(add)], [true, true, false]);
-check("ReceiveWizard: no database access of its own; quantity formula unchanged", [/supabase/.test(wiz), wiz.includes("const finalQty = usePackaging ? Number(unitsPerCarton) * Number(cartonsReceived) : Number(form.quantityReceived);")], [false, true]);
+check("ReceiveWizard: no database access of its own; the saved quantity, unit, packaging and threshold come from the same receipt plan the review shows", [/supabase/.test(wiz), ["unit: v.unit,", "quantityReceived: v.total,", "unitsPerCarton: v.packaged ? v.perPackage : null,", "packUnit: v.packaged ? v.packUnit : null,", "lowStockThreshold: v.lowStock,"].every((x) => wiz.includes(x))], [false, true]);
 check("the window itself never wrote to the database", globalThis.__writes || [], []);
 check("no React errors", env.errors, []);
 env.close();

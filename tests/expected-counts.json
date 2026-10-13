@@ -2,7 +2,7 @@
   "_about": "Every test suite and the exact number of checks it must run. The count reporter (helpers/count-reporter.mjs) fails the run if a suite is missing, unexpected, or runs a different number of checks. PostgreSQL suites run once per version in TEST_PG_VERSIONS (default 15,17); {v} is the version. Update this file deliberately when a suite gains or loses checks.",
   "unit": {
     "unit/units.test.mjs": {
-      "U1 · unit engine (units.js)": 109
+      "U1 · unit engine (units.js)": 111
     },
     "unit/lotEdit.test.mjs": {
       "U0 · U2c-1 · U2c-2 · Edit Lot rules and save path (lotEdit.js)": 125
@@ -14,7 +14,10 @@
       "Batch E · reconciliation evidence rules (reconciliationEvidence.js)": 49
     },
     "unit/receiveSave.test.mjs": {
-      "U2d-1 · Receive save path (receiveSave.js)": 30
+      "U2d-1 · Receive save path (receiveSave.js)": 34
+    },
+    "unit/receivePlan.test.mjs": {
+      "U2d-2 · Receive entry rules (receivePlan.js)": 41
     }
   },
   "ui": {
@@ -29,6 +32,9 @@
     },
     "ui/receive.test.mjs": {
       "U2d-1 · Receive window save behaviour": 27
+    },
+    "ui/receivePackaging.test.mjs": {
+      "U2d-2 · Receive window packaging, review and duplicate advisory": 39
     }
   },
   "pg": {
@@ -73,6 +79,9 @@
     },
     "pg/receiveSave.test.mjs": {
       "U2d-1 · Receive save path (PostgreSQL {v})": 26
+    },
+    "pg/receivePackaging.test.mjs": {
+      "U2d-2 · packaged Receive on PostgreSQL (PostgreSQL {v})": 21
     }
   }
 }

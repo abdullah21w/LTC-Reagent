@@ -38,7 +38,9 @@ export function newReceiptId() {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-// Exactly the columns the Receive screen has always written, plus the receipt id.
+// The columns the Receive screen has always written, plus the receipt id (U2d-1) and
+// the package name (U2d-2). Quantities are the canonical base-unit total, computed by
+// receivePlan.planReceipt; nothing here converts a quantity.
 export function buildReceiptRow(entry, id) {
   return {
     id,
@@ -55,6 +57,7 @@ export function buildReceiptRow(entry, id) {
     added_by: entry.receivedBy,
     low_stock_threshold: entry.lowStockThreshold,
     units_per_carton: entry.unitsPerCarton || null,
+    pack_unit: entry.unitsPerCarton && entry.packUnit && String(entry.packUnit).trim() ? String(entry.packUnit).trim() : null,
     intact_container: entry.intact_container,
     complete_compound: entry.complete_compound,
     expiration_validity: entry.expiration_validity,
@@ -67,7 +70,7 @@ export function buildReceiptRow(entry, id) {
 
 // The receipt's identity is its id (checked by the lookup itself); these submitted
 // fields must also match before an existing Lot is accepted as this receipt.
-const SAME_RECEIPT = ["name", "department", "item_type", "device", "lot_number", "unit", "quantity_received", "expiry_date", "date_added", "added_by", "units_per_carton"];
+const SAME_RECEIPT = ["name", "department", "item_type", "device", "lot_number", "unit", "quantity_received", "expiry_date", "date_added", "added_by", "units_per_carton", "pack_unit"];
 const norm = (k, v) => (v === null || v === undefined || v === "" ? null : ["quantity_received", "units_per_carton"].includes(k) ? Number(v) : String(v));
 export const sameReceipt = (row, saved) => !!saved && saved.id === row.id && SAME_RECEIPT.every((k) => norm(k, row[k]) === norm(k, saved[k]));
 
@@ -92,7 +95,7 @@ export const AUDIT_WARNING = "The receipt was saved, but it could not be recorde
 
 export function receiptDescription(row) {
   const qty = Number(row.quantity_received);
-  const pack = row.units_per_carton ? ` (${Number(row.units_per_carton)} per box)` : "";
+  const pack = row.units_per_carton ? ` (${Number(row.units_per_carton)} per ${row.pack_unit || "box"})` : "";
   return `${row.name} — Lot ${row.lot_number} — received ${Number.isFinite(qty) ? qty : row.quantity_received} ${String(row.unit ?? "").trim()}${pack}`.trim();
 }
 

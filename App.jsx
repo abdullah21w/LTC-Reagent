@@ -346,6 +346,11 @@ export default function App() {
     return result;
   }
 
+  // U2d-2: read-only lookup for the Receive duplicate advisory (never writes).
+  function lookupLotsByNumber(lotNumber) {
+    return supabase.from("reagents").select("id, name, lot_number, department, device, unit, units_per_carton, pack_unit, quantity_received, current_quantity, date_added, added_by, deleted").eq("lot_number", lotNumber);
+  }
+
   async function recordConsumption(entry) {
     if (!can("log_use")) return;
     // Checked before anything is written: the Stock Count user name is reserved.
@@ -871,7 +876,7 @@ export default function App() {
         </main>
       </div>
 
-      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} />}
+      {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} lookupLots={lookupLotsByNumber} />}
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} presets={presets} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
       {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {discardReagentTarget && <DiscardModal reagent={discardReagentTarget} onClose={() => setDiscardReagentTarget(null)} onDiscard={discardReagent} />}

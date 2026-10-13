@@ -167,16 +167,19 @@ export function lotUnits(lot, options = {}) {
   return { unit, packaged: pack.packaged, perBox: pack.perBox, packagingValid: pack.valid, packagingReason: pack.reason, packUnit: resolvePackUnit(lot, options) };
 }
 
-// boxes × perBox + loose → base units. Inputs are what a person typed; all
-// must be whole numbers ≥ 0 and perBox a valid box size.
+// boxes × perBox + loose → base units. Inputs are what a person typed; boxes
+// must be a whole number ≥ 0 and perBox a valid box size. Loose units follow the
+// base unit (`unit`, optional): whole for countable units, up to 2 decimals for
+// measured ones; without `unit` they must be whole (the original rule).
+// The sum is computed in hundredths, so 3 × 500 + 0.1 is exactly 1500.1.
 // → { ok, value, reason }
-export function toBaseUnits({ boxes = 0, loose = 0 }, perBox) {
+export function toBaseUnits({ boxes = 0, loose = 0 }, perBox, unit = "piece") {
   const p = parsePackaging(perBox);
   if (!p.packaged) return { ok: false, value: null, reason: "invalid_box_size" };
-  const b = validateQuantity(boxes === "" ? 0 : boxes, "box"), l = validateQuantity(loose === "" ? 0 : loose, "piece");
+  const b = validateQuantity(boxes === "" ? 0 : boxes, "box"), l = validateQuantity(loose === "" ? 0 : loose, unit);
   if (!b.ok) return { ok: false, value: null, reason: `boxes_${b.reason}` };
   if (!l.ok) return { ok: false, value: null, reason: `loose_${l.reason}` };
-  return { ok: true, value: b.value * p.perBox + l.value, reason: null };
+  return { ok: true, value: (b.value * p.perBox * 100 + Math.round(l.value * 100)) / 100, reason: null };
 }
 
 // base units → { fullBoxes, loose, total, exact } for a valid box size; null

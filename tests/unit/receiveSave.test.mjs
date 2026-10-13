@@ -3,7 +3,7 @@
 // mismatch, refused, permission, not confirmed, unknown, zero rows), honest wording, and an
 // activity entry written at most once per receipt. Each case uses its own receipt id.
 import { randomUUID } from "node:crypto";
-import { suite, check, load } from "../helpers/core.mjs";
+import { suite, check, load, readSource } from "../helpers/core.mjs";
 
 suite("U2d-1 · Receive save path (receiveSave.js)", async () => {
 const S = await load("receiveSave.js");
@@ -11,8 +11,10 @@ const entry = (over = {}) => ({ receiptId: randomUUID(), name: "  Reagent R​ "
 
 // ── the row written: exactly the columns Receive always wrote, plus the receipt id ──
 const E0 = entry({ receiptId: "11111111-2222-4333-8444-555555555555" });
-check("row: same columns and values as before (name cleaned, current = received), plus id", S.buildReceiptRow(E0, E0.receiptId), { id: E0.receiptId, name: "Reagent R", department: "Chemistry", item_type: "Reagent", device: "Analyzer 1", lot_number: "TR-001", unit: "bottle", quantity_received: 12, current_quantity: 12, expiry_date: "2027-06-30", date_added: "2026-10-13", added_by: "tester", low_stock_threshold: 2, units_per_carton: 6, intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: false, receiving_notes: "note", inspection_notes: "" });
-check("row: blank device → '', blank expiry → null, no packaging → null (as before)", (({ device, expiry_date, units_per_carton }) => [device, expiry_date, units_per_carton])(S.buildReceiptRow(entry({ device: "", expiryDate: "", unitsPerCarton: null }), "x")), ["", null, null]);
+check("row: same columns and values as before (name cleaned, current = received), plus id", S.buildReceiptRow(E0, E0.receiptId), { id: E0.receiptId, name: "Reagent R", department: "Chemistry", item_type: "Reagent", device: "Analyzer 1", lot_number: "TR-001", unit: "bottle", quantity_received: 12, current_quantity: 12, expiry_date: "2027-06-30", date_added: "2026-10-13", added_by: "tester", low_stock_threshold: 2, units_per_carton: 6, pack_unit: null, intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: false, receiving_notes: "note", inspection_notes: "" });
+check("row: blank device → '', blank expiry → null, no packaging → null (as before)", (({ device, expiry_date, units_per_carton, pack_unit }) => [device, expiry_date, units_per_carton, pack_unit])(S.buildReceiptRow(entry({ device: "", expiryDate: "", unitsPerCarton: null, packUnit: "box" }), "x")), ["", null, null, null]);
+check("row (U2d-2): packaged receipt stores the package name trimmed with its size; the activity text names it", [(({ units_per_carton, pack_unit }) => [units_per_carton, pack_unit])(S.buildReceiptRow(entry({ unitsPerCarton: 5, packUnit: "  Sachet " }), "x")), S.receiptDescription(S.buildReceiptRow(entry({ unitsPerCarton: 5, packUnit: "kit", quantityReceived: 17, unit: "test" }), "x"))], [[5, "Sachet"], "Reagent R — Lot TR-001 — received 17 test (5 per kit)"]);
+check("an existing Lot with a different package name is not this receipt (mismatch)", S.sameReceipt(S.buildReceiptRow(entry({ unitsPerCarton: 5, packUnit: "box" }), "i"), { ...S.buildReceiptRow(entry({ unitsPerCarton: 5, packUnit: "kit" }), "i") }), false);
 check("receipt ids: UUID v4 format, unique", (() => { const a = S.newReceiptId(), b = S.newReceiptId(); return [/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(a), a !== b]; })(), [true, true]);
 check("activity text: name, Lot, quantity and unit, box size (no secrets)", [S.receiptDescription(S.buildReceiptRow(E0, "x")), S.receiptDescription(S.buildReceiptRow(entry({ unitsPerCarton: null, unit: "box", quantityReceived: 3 }), "x"))], ["Reagent R — Lot TR-001 — received 12 bottle (6 per box)", "Reagent R — Lot TR-001 — received 3 box"]);
 
@@ -95,4 +97,7 @@ check("no activity logger supplied: auditLogged null (not claimed)", [t.r.ok, t.
 t = await run({ insert: { data: [{ id: "x" }], error: null } }, entry({ receiptId: undefined }));
 check("no receipt id: nothing sent", [t.r.ok, t.inserts], [false, 0]);
 check("describeReceiveError: other errors keep the database message; refusals say nothing was saved", [S.describeReceiveError({ message: "boom" }), S.describeReceiveError({ code: "22P02", message: "invalid input syntax for type numeric" }).endsWith("try again.")], ["The database refused the receipt (boom). Nothing was saved.", true]);
-}, { expectedChecks: 30 });
+const recvSrc = ["receiveSave.js", "receivePlan.js", "ReceiveWizard.jsx"].map((f) => [f, readSource(f)]);
+check("U2d-2 final review: the Receive path can only insert a new Lot — no update, upsert, delete or RPC anywhere in it (an existing Lot can't be changed)", recvSrc.filter(([, t]) => /\.(update|upsert|delete|rpc)\(/.test(t)).map(([f]) => f), []);
+check("…and quantity_received and current_quantity come from the same value in the inserted row", (({ quantity_received, current_quantity }) => [quantity_received, current_quantity])(S.buildReceiptRow(entry({ quantityReceived: 1500.1 }), "x")), [1500.1, 1500.1]);
+}, { expectedChecks: 34 });

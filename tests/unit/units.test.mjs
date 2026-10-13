@@ -53,8 +53,10 @@ check("invalid box size never splits a quantity", [U.splitIntoBoxes(12, 0), U.sp
 check("each lot keeps its own factor (Kit Q: 1/box and 6/box)", [U.lotUnits(LOTS.q1).perBox, U.lotUnits(LOTS.q6).perBox], [1, 6]);
 
 // ── Conversions ──
+const tb2 = (b, l, p, u) => { const r = U.toBaseUnits({ boxes: b, loose: l }, p, u); return r.ok ? r.value : r.reason; };
 const tb = (b, l, p) => { const r = U.toBaseUnits({ boxes: b, loose: l }, p); return r.ok ? r.value : r.reason; };
 check("toBaseUnits", [tb(3, 0, 5), tb(2, 4, 5), tb(0, 0, 5), tb(0, 7, 5), tb("", "3", 5), tb(1, 0, 1)], [15, 14, 0, 7, 3, 1]);
+check("toBaseUnits with a measured base unit: loose up to 2 decimals, exact sum (U2d-2)", [tb2(3, 0.1, 500, "mL"), tb2(0, 12.5, 500, "mL"), tb2(1, 0.125, 500, "mL"), tb2(2, 0.5, 5, "piece"), tb2(2, 1, 5, "piece")], [1500.1, 12.5, "loose_too_precise", "loose_not_whole", 11]);
 check("toBaseUnits refuses bad input", [tb(1.5, 0, 5), tb(-1, 0, 5), tb(1, 0.5, 5), tb(1, 0, null), tb(1, 0, 0), tb("x", 0, 5)], ["boxes_not_whole", "boxes_negative", "loose_not_whole", "invalid_box_size", "invalid_box_size", "boxes_not_a_number"]);
 const sb = (q, p) => { const r = U.splitIntoBoxes(q, p); return r && [r.fullBoxes, r.loose, r.exact]; };
 check("splitIntoBoxes exact divisibility / zero / below one box", [sb(15, 5), sb(10, 5), sb(0, 5), sb(4, 5), sb(5, 5), sb(6, 1)], [[3, 0, true], [2, 0, true], [0, 0, true], [0, 4, true], [1, 0, true], [6, 0, true]]);
@@ -178,8 +180,9 @@ const code = srcText.split("\n").filter((l) => !l.trim().startsWith("//")).join(
 check("units.js has no imports, no database or network calls", [/^\s*import\s/m.test(srcText), /supabase|fetch\(|\.rpc\(|\.insert\(|\.update\(|\.delete\(/.test(code)], [false, false]);
 const appFiles = [...readdirSync(rootPath()).filter((f) => /\.(jsx?|mjs)$/.test(f) && f !== "units.js"), ...readdirSync(rootPath("api")).filter((f) => /\.m?js$/.test(f)).map((f) => `api/${f}`)];
 const importers = appFiles.filter((f) => /from\s+["'](\.\.?\/)+units(\.js)?["']/.test(readSource(f))).sort();
-check("units.js is imported only by forecast.js, Charts.jsx, api/_reportBuilder.js, App.jsx and lotEdit.js", importers, ["App.jsx", "Charts.jsx", "api/_reportBuilder.js", "forecast.js", "lotEdit.js"]);
+check("units.js is imported only by forecast.js, Charts.jsx, api/_reportBuilder.js, App.jsx, lotEdit.js and (U2d-2) ReceiveWizard.jsx + receivePlan.js", importers, ["App.jsx", "Charts.jsx", "ReceiveWizard.jsx", "api/_reportBuilder.js", "forecast.js", "lotEdit.js", "receivePlan.js"]);
 const namesFrom = (f) => ((readSource(f).match(/import\s*\{([^}]*)\}\s*from\s*["']\.\/units["']/) || [])[1] || "").split(",").map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean).sort();
 check("Edit Lot / Log use import only label and validation helpers from units.js — no quantity conversion", [namesFrom("App.jsx"), namesFrom("lotEdit.js")], [["SUGGESTED_PACK_UNITS", "normalizeUnit", "unitLabel"], ["PACK_UNIT_MAX_LENGTH", "unitLabel", "validatePackUnit"]]);
-check("Receive and Stock Count don't import units.js (until U2d-2 deliberately does)", ["ReceiveWizard.jsx", "StockCount.jsx"].filter((f) => importers.includes(f)), []);
-}, { expectedChecks: 109 });
+check("Stock Count doesn't import units.js", ["StockCount.jsx"].filter((f) => importers.includes(f)), []);
+check("Receive imports only labels/validation and the receipt conversion (toBaseUnits) — never consume, allocation or display-splitting helpers", [namesFrom("ReceiveWizard.jsx"), namesFrom("receivePlan.js")], [["SUGGESTED_PACK_UNITS", "normalizeUnit", "unitLabel"], ["normalizeUnit", "toBaseUnits", "unitLabel", "validateQuantity"]]);
+}, { expectedChecks: 111 });
