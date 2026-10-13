@@ -18,6 +18,9 @@
     },
     "unit/receivePlan.test.mjs": {
       "U2d-2 · Receive entry rules (receivePlan.js)": 41
+    },
+    "unit/countEntry.test.mjs": {
+      "Stock Count package + loose entry (countEntry.js)": 32
     }
   },
   "ui": {
@@ -35,6 +38,9 @@
     },
     "ui/receivePackaging.test.mjs": {
       "U2d-2 · Receive window packaging, review and duplicate advisory": 39
+    },
+    "ui/stockCountEntry.test.mjs": {
+      "Stock Count window: package + loose entry": 35
     }
   },
   "pg": {
@@ -82,6 +88,9 @@
     },
     "pg/receivePackaging.test.mjs": {
       "U2d-2 · packaged Receive on PostgreSQL (PostgreSQL {v})": 21
+    },
+    "pg/countEntry.test.mjs": {
+      "Stock Count package + loose entry (PostgreSQL {v})": 15
     }
   }
 }

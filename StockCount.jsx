@@ -6,6 +6,8 @@ import { buildSpreadEntries } from "./logSpread";
 import { localDay, previousCompletedCounts, usageInterval, dateInInterval, entriesInInterval } from "./countBounds";
 import { startDecision } from "./countScope";
 import { countedFields } from "./countEvidence";
+import { linePackaging, planCount, entryFor, entryMode, switchEntry, sameCount } from "./countEntry";
+import { unitLabel } from "./units";
 
 const T = {
   primary: "var(--primary)",
@@ -32,6 +34,73 @@ function ExpiryTag({ reagent, warnDays }) {
   const days = Math.round((new Date(reagent.expiry_date) - new Date(todayISO())) / 86400000);
   const color = days < 0 ? RED : days <= warnDays ? AMBER : T.textMuted;
   return <span style={{ color, fontWeight: days <= warnDays ? 700 : 400 }}> · Exp {reagent.expiry_date}{days < 0 ? " (expired)" : ""}</span>;
+}
+
+// The counted-quantity fields of one line (countEntry.js), from the line's own
+// packaging snapshot:
+//   named    full packages + loose base units, total shown;
+//   unnamed  the base-unit quantity, with "Calculate using packages" to switch
+//            to full packages + loose (and back); "Package name not recorded";
+//   none     the base-unit quantity only, as before.
+// Saved when focus leaves the line's fields. Switching never saves.
+function CountFields({ it, draft, mode, saving, saveError, switchError, hasMismatch, onEdit, onLeave, onSwitch }) {
+  const pk = linePackaging(it);
+  const entry = draft || entryFor(it.counted_quantity, it, mode);
+  const plan = draft ? planCount(draft, it, mode) : null;
+  const switching = useRef(false);
+  const locked = !!it.resolved;
+  const lockedTitle = locked ? "This line is resolved — its counted quantity can't be changed." : undefined;
+  const field = (w) => ({
+    width: w, border: `1px solid ${plan?.status === "invalid" ? RED : hasMismatch ? AMBER : T.cardBorder}`, borderRadius: 7, padding: "8px 10px",
+    fontSize: 15, textAlign: "right", background: T.cardBg, color: T.text, boxSizing: "border-box",
+  });
+  const small = { display: "flex", flexDirection: "column", gap: 3, fontSize: 11.5, color: T.textMuted, fontWeight: 600 };
+  const units = unitLabel(it.unit, 2);
+  const leave = (e) => { if (!switching.current && !e.currentTarget.contains(e.relatedTarget)) onLeave(); };
+  const switchTo = (to) => { switching.current = true; onSwitch(to); setTimeout(() => { switching.current = false; }, 0); };
+  const switchButton = (to, label) => (
+    <button type="button" disabled={locked} onMouseDown={(e) => e.preventDefault()} onClick={() => switchTo(to)}
+      style={{ background: "none", border: `1px solid ${T.cardBorder}`, borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: T.primary, cursor: locked ? "default" : "pointer" }}>
+      {label}
+    </button>
+  );
+  const factor = <>1 {pk.word?.(1)} = {pk.perPackage} {unitLabel(it.unit, pk.perPackage)}</>;
+  const status = (
+    <>
+      {plan?.status === "invalid" && <div role="alert" data-testid="count-errors" style={{ fontSize: 12, color: RED }}>{plan.errors.join(" ")}</div>}
+      {switchError && <div role="alert" data-testid="count-switch-error" style={{ fontSize: 12, color: RED }}>{switchError}</div>}
+      {saving && <div style={{ fontSize: 12, color: T.textMuted }}>Saving…</div>}
+      {saveError && <div role="alert" data-testid="count-save-error" style={{ fontSize: 12, color: RED }}>{saveError}</div>}
+    </>
+  );
+  const unnamedNote = pk.kind === "unnamed" && <div data-testid="count-packaging" style={{ fontSize: 11.5, color: T.textMuted }}>Package name not recorded · {factor}</div>;
+  if (mode !== "packages" || pk.kind === "none") {
+    return (
+      <div onBlur={leave} role="group" aria-label={`Count of Lot ${it.lot_number}`} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, maxWidth: "100%" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="number" inputMode="decimal" placeholder="Counted" aria-label={`Counted ${units}`} value={entry.quantity} disabled={locked} title={lockedTitle} onChange={(e) => onEdit("quantity", e.target.value)} style={field(100)} />
+          <div style={{ fontSize: 12, color: T.textMuted, width: 30 }}>{it.unit}</div>
+        </div>
+        {unnamedNote}
+        {pk.kind === "unnamed" && switchButton("packages", "Calculate using packages")}
+        {status}
+      </div>
+    );
+  }
+  return (
+    <div onBlur={leave} role="group" aria-label={`Count of Lot ${it.lot_number}`} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, maxWidth: "100%" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+        <label style={small}>Full {pk.word(2)}<input type="number" inputMode="numeric" placeholder="0" value={entry.packages} disabled={locked} title={lockedTitle} onChange={(e) => onEdit("packages", e.target.value)} style={field(84)} /></label>
+        <label style={small}>Loose {units}<input type="number" inputMode="decimal" placeholder="0" value={entry.loose} disabled={locked} title={lockedTitle} onChange={(e) => onEdit("loose", e.target.value)} style={field(84)} /></label>
+      </div>
+      {pk.kind === "named" ? <div data-testid="count-packaging" style={{ fontSize: 11.5, color: T.textMuted }}>{factor}</div> : unnamedNote}
+      {plan?.status === "ok" && <div data-testid="count-total" style={{ fontSize: 12.5, fontWeight: 700, color: T.text }}>Counted: {plan.text}</div>}
+      {plan?.status === "empty" && <div data-testid="count-total" style={{ fontSize: 12.5, color: T.textMuted }}>Not counted</div>}
+      {!plan && it.counted_quantity != null && <div data-testid="count-total" style={{ fontSize: 12.5, color: T.textMuted }}>Counted: {Math.round(Number(it.counted_quantity) * 100) / 100} {unitLabel(it.unit, Number(it.counted_quantity))}</div>}
+      {pk.kind === "unnamed" && switchButton("total", `Enter the total in ${units} instead`)}
+      {status}
+    </div>
+  );
 }
 
 const describeEdit = (e) => (e.mode === "range" ? `spread ${e.from} → ${e.to}` : e.date);
@@ -63,6 +132,15 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const [applyingEdits, setApplyingEdits] = useState(false);
   const [editMsg, setEditMsg] = useState("");
   const rowRefs = useRef({});
+  // Count entry per line (countEntry.js): what is being typed (kept until it is
+  // saved, so moving between fields or lines never changes a count by itself),
+  // the line being saved, and why the last save of a line failed.
+  const [countDrafts, setCountDrafts] = useState({}); // itemId -> { packages, loose, quantity }
+  const [countSaving, setCountSaving] = useState({}); // itemId -> true
+  const [countSaveError, setCountSaveError] = useState({}); // itemId -> message
+  const [countModes, setCountModes] = useState({}); // itemId -> "packages" when "Calculate using packages" was chosen
+  const [countSwitchError, setCountSwitchError] = useState({}); // itemId -> why a switch was refused
+  const countSavingRef = useRef(new Set());
   // In-flight guard against double submission (double clicks, or a click
   // while the first request chain is still running). The ref is the source of
   // truth and is taken synchronously, before any await; the state copy only
@@ -356,14 +434,60 @@ export default function StockCount({ reagents, departments, username, reload, wa
   }
 
   // Counting only — resolving is separate. Once a line is resolved its counted
-  // quantity is final: the input is disabled and this refuses the write too.
-  async function saveCount(itemId, value) {
-    const current = items.find((it) => it.id === itemId);
-    if (current?.resolved) return;
-    const num = value === "" ? null : Number(value);
-    const observed = countedFields(current?.counted_quantity, num, username);
-    setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, counted_quantity: num, ...observed } : it)));
-    await supabase.from("inventory_count_items").update({ counted_quantity: num, ...observed }).eq("id", itemId);
+  // quantity is final: the inputs are disabled and this refuses the write too.
+  // Saves when focus leaves the line's fields, only a valid entry that differs
+  // from the saved count (packages × size + loose, in base units). The line
+  // shows the new count only after the database accepted it; a refused save
+  // keeps the entry and says so.
+  const modeOf = (it) => entryMode(it, countModes[it.id]);
+  function editCount(it, field, value) {
+    setCountDrafts((d) => ({ ...d, [it.id]: { ...(d[it.id] || entryFor(it.counted_quantity, it, modeOf(it))), [field]: value } }));
+    setCountSaveError((e) => (e[it.id] ? { ...e, [it.id]: null } : e));
+    setCountSwitchError((e) => (e[it.id] ? { ...e, [it.id]: null } : e));
+  }
+  // Switch between the base-unit total and package + loose fields (only for a
+  // box size without a recorded name). Writes nothing: the entered total is
+  // carried over exactly; an invalid entry is kept and the switch refused.
+  function switchCountMode(it, to) {
+    const from = modeOf(it);
+    const draft = countDrafts[it.id];
+    const r = switchEntry(draft || entryFor(it.counted_quantity, it, from), it, from, to);
+    if (!r.ok) { setCountSwitchError((e) => ({ ...e, [it.id]: r.error })); return; }
+    setCountSwitchError((e) => (e[it.id] ? { ...e, [it.id]: null } : e));
+    setCountModes((m) => ({ ...m, [it.id]: to }));
+    if (draft) setCountDrafts((d) => ({ ...d, [it.id]: r.entry }));
+  }
+  async function saveCount(it) {
+    const draft = countDrafts[it.id];
+    if (!draft || it.resolved || countSavingRef.current.has(it.id)) return;
+    const plan = planCount(draft, it, modeOf(it));
+    if (plan.status === "invalid") return; // the reason is shown under the line
+    const next = plan.status === "empty" ? null : plan.value;
+    const dropDraft = () => setCountDrafts((d) => {
+      if (d[it.id] !== draft) return d; // typed again meanwhile: keep that
+      const rest = { ...d };
+      delete rest[it.id];
+      return rest;
+    });
+    if (sameCount(it.counted_quantity, next)) { dropDraft(); return; }
+    const observed = countedFields(it.counted_quantity, next, username);
+    countSavingRef.current.add(it.id);
+    setCountSaving((s) => ({ ...s, [it.id]: true }));
+    setCountSaveError((e) => (e[it.id] ? { ...e, [it.id]: null } : e));
+    let error = null;
+    try {
+      ({ error } = await supabase.from("inventory_count_items").update({ counted_quantity: next, ...observed }).eq("id", it.id));
+    } catch (e) {
+      error = e;
+    }
+    countSavingRef.current.delete(it.id);
+    setCountSaving((s) => ({ ...s, [it.id]: false }));
+    if (error) {
+      setCountSaveError((e) => ({ ...e, [it.id]: "This count wasn't saved. Your entry is kept — check the connection, then leave the field again to retry." }));
+      return;
+    }
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, counted_quantity: next, ...observed } : x)));
+    dropDraft();
   }
 
   function handleScan(text) {
@@ -620,19 +744,18 @@ export default function StockCount({ reagents, departments, username, reload, wa
                       <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>{it.reagent_name}</div>
                       <div style={{ fontSize: 11.5, color: T.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>Lot {it.lot_number} · expected {it.expected_quantity} {it.unit}<ExpiryTag reagent={reagentById[it.reagent_id]} warnDays={warnDays} /></div>
                     </div>
-                    <input
-                      type="number"
-                      placeholder="Counted"
-                      defaultValue={it.counted_quantity ?? ""}
-                      disabled={!!it.resolved}
-                      title={it.resolved ? "This line is resolved — its counted quantity can't be changed." : undefined}
-                      onBlur={(e) => saveCount(it.id, e.target.value)}
-                      style={{
-                        width: 100, border: `1px solid ${hasMismatch ? AMBER : T.cardBorder}`, borderRadius: 7, padding: "8px 10px",
-                        fontSize: 15, textAlign: "right", background: T.cardBg, color: T.text, boxSizing: "border-box",
-                      }}
+                    <CountFields
+                      it={it}
+                      draft={countDrafts[it.id]}
+                      saving={!!countSaving[it.id]}
+                      saveError={countSaveError[it.id]}
+                      mode={modeOf(it)}
+                      switchError={countSwitchError[it.id]}
+                      onSwitch={(to) => switchCountMode(it, to)}
+                      hasMismatch={hasMismatch}
+                      onEdit={(field, value) => editCount(it, field, value)}
+                      onLeave={() => saveCount(it)}
                     />
-                    <div style={{ fontSize: 12, color: T.textMuted, width: 30 }}>{it.unit}</div>
                   </div>
                 );
               })}
