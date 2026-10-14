@@ -29,6 +29,7 @@
 //   unknown        the request failed and the check failed too — same advice
 
 import { normalizeUnit, unitLabel } from "./units";
+import { releaseRefusalMessage } from "./releaseGuard";
 
 export function newLogId() {
   const c = globalThis.crypto;
@@ -108,6 +109,9 @@ function refusal(r, entry) {
 }
 
 export function describeLogUseError(e) {
+  // Maintenance / outdated build (ADD_RELEASE_CONTROL.sql): say so plainly.
+  const rel = releaseRefusalMessage(e);
+  if (rel) return rel;
   const msg = String(e?.message || "");
   if (e?.code === "PGRST202" || /could not find the function|function .*log_use.* does not exist/i.test(msg)) return "Log use can't be saved yet: the database update for it hasn't been applied. Nothing was recorded. Please tell the owner.";
   if (e?.code === "42501" || /row-level security|permission denied/i.test(msg)) return "You don't have permission to log use, so nothing was recorded. Ask the owner to check your account.";

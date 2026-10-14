@@ -25,7 +25,7 @@ export default async function handler(req, res) {
   try {
     // 1. Load config (alert email + day thresholds)
     const configRes = await fetch(`${SUPABASE_URL}/rest/v1/app_config?id=eq.1&select=alert_email,expiry_alert_days`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "x-ltc-build": process.env.VERCEL_GIT_COMMIT_SHA || "dev" },
     });
     const configRows = await configRes.json();
     const config = configRows && configRows[0];
@@ -37,7 +37,7 @@ export default async function handler(req, res) {
 
     // 2. Load active reagents
     const reagentsRes = await fetch(`${SUPABASE_URL}/rest/v1/reagents?deleted=eq.false&select=*`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "x-ltc-build": process.env.VERCEL_GIT_COMMIT_SHA || "dev" },
     });
     const reagents = await reagentsRes.json();
 

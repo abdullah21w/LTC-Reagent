@@ -72,7 +72,7 @@ function daysBetween(dateStr, fromStr) {
 
 async function fetchTable(SUPABASE_URL, SUPABASE_KEY, table, query = "") {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*${query}`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "x-ltc-build": process.env.VERCEL_GIT_COMMIT_SHA || "dev" },
   });
   return res.json();
 }

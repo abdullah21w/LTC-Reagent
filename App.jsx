@@ -14,6 +14,9 @@ import { planLotEdit, describeInBoxes, buildLotUpdate, saveLotEdit, hasHistory }
 import { saveReceipt } from "./receiveSave";
 import { saveLogUse, newLogId, checkUseAmount } from "./logUseSave";
 import { saveLogEdit, saveLogUndo, newRequestId, checkEditAmount, SPREAD_UNAVAILABLE } from "./logEditSave";
+import { useRelease, MaintenanceScreen, OwnerMaintenanceBanner, UpdateBanner } from "./ReleaseGate";
+import { setBusy } from "./releaseGuard";
+import { BUILD } from "./buildInfo";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
 
@@ -204,6 +207,14 @@ export default function App() {
   const [discardReagentTarget, setDiscardReagentTarget] = useState(null);
   const [editLog, setEditLog] = useState(null);
   const undoInFlight = useRef(new Set()); // log ids whose undo is on its way
+  // Release control (ReleaseGate.jsx; enforced by ADD_RELEASE_CONTROL.sql):
+  // maintenance screen, update banner, and a safe automatic reload of an outdated
+  // page — never while a write window is open or the Settings page is being edited.
+  const release = useRelease({ client: supabase, build: BUILD });
+  const [ownerSignIn, setOwnerSignIn] = useState(false);
+  useEffect(() => {
+    setBusy("app-windows", !!(showWizard || showLog || showChangePassword || editReagent || discardReagentTarget || editLog || tab === "settings"));
+  }, [showWizard, showLog, showChangePassword, editReagent, discardReagentTarget, editLog, tab]);
   const [error, setError] = useState("");
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -589,10 +600,18 @@ export default function App() {
     return <PublicSummaryPage groups={groups} counts={counts} logs={logs} reagents={reagents} departments={config.departments || []} />;
   }
 
+  // Maintenance: staff (and anyone signed out) see the maintenance screen; the
+  // owner can sign in and gets a read-only view with a banner.
+  if (release.decision.kind === "maintenance" && role !== "owner" && !(ownerSignIn && !role)) {
+    return <MaintenanceScreen message={release.decision.message} onOwnerSignIn={!role ? () => setOwnerSignIn(true) : null} />;
+  }
+
   if (!role) return <Login config={config} staffAccounts={staffAccounts} onLogin={handleLogin} />;
 
   return (
     <div style={{ minHeight: "100vh", background: THEME.bg, fontFamily: "'Inter', sans-serif", color: THEME.text, display: "flex" }} data-theme={darkMode ? "dark" : "light"}>
+      {release.decision.kind === "maintenance" && role === "owner" && <OwnerMaintenanceBanner message={release.decision.message} />}
+      {release.decision.kind === "outdated" && <UpdateBanner blocked={release.blocked} onReload={() => window.location.reload()} />}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         :root {

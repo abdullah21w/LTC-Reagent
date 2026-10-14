@@ -26,6 +26,7 @@
 // rules are left as they are and don't stop unrelated edits.
 
 import { unitLabel as countLabel, validatePackUnit, PACK_UNIT_MAX_LENGTH } from "./units";
+import { releaseRefusalMessage } from "./releaseGuard";
 
 export const normUnit = (u) => String(u ?? "").trim().toLowerCase();
 
@@ -217,6 +218,9 @@ const isNetworkError = (e) => e?.name === "TypeError" || /failed to fetch|networ
 //   { kind: "missing" }  — the lot no longer exists
 //   otherwise a Supabase/PostgREST error ({ message, code, details }) or a thrown error
 export function describeSaveError(e) {
+  // Maintenance / outdated build (ADD_RELEASE_CONTROL.sql): say so plainly.
+  const rel = releaseRefusalMessage(e);
+  if (rel) return rel;
   if (e?.kind === "conflict") return "This lot was changed elsewhere since you opened it (for example, usage was logged or someone else edited it). Nothing was saved — close this window and open the lot again to see the latest values.";
   if (e?.kind === "missing") return "This lot no longer exists, so nothing was saved.";
   if (e?.kind === "permission") return "You don't have permission to edit lots, so nothing was saved.";

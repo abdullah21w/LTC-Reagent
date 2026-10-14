@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { BUILD } from "./buildInfo";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -13,4 +14,6 @@ if (!url || !key) {
   );
 }
 
-export const supabase = createClient(url, key);
+// Every request carries this app's build id: the database refuses writes from any
+// build other than the one the owner approved (ADD_RELEASE_CONTROL.sql).
+export const supabase = createClient(url, key, { global: { headers: { "x-ltc-build": BUILD } } });

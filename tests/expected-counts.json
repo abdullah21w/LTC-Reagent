@@ -27,6 +27,9 @@
     },
     "unit/logEditSave.test.mjs": {
       "Atomic edit / undo · save paths (logEditSave.js)": 19
+    },
+    "unit/releaseGuard.test.mjs": {
+      "Release control · browser rules (releaseGuard.js)": 15
     }
   },
   "ui": {
@@ -53,6 +56,9 @@
     },
     "ui/logEdit.test.mjs": {
       "Atomic edit / undo · Edit log window": 13
+    },
+    "ui/releaseGate.test.mjs": {
+      "Release control · maintenance screen and forced update": 13
     }
   },
   "pg": {
@@ -109,6 +115,9 @@
     },
     "pg/logEdit.test.mjs": {
       "Atomic log edit / undo (PostgreSQL {v})": 39
+    },
+    "pg/releaseControl.test.mjs": {
+      "Release control: maintenance + forced update (PostgreSQL {v})": 31
     }
   }
 }

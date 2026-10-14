@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   try {
     const configRes = await fetch(`${SUPABASE_URL}/rest/v1/app_config?id=eq.1&select=owner_2fa_enabled,owner_2fa_email`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "x-ltc-build": process.env.VERCEL_GIT_COMMIT_SHA || "dev" },
     });
     const configRows = await configRes.json();
     const config = configRows && configRows[0];
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
     await fetch(`${SUPABASE_URL}/rest/v1/app_config?id=eq.1`, {
       method: "PATCH",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "x-ltc-build": process.env.VERCEL_GIT_COMMIT_SHA || "dev", "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({ owner_2fa_code: code, owner_2fa_code_expires: expires }),
     });
 

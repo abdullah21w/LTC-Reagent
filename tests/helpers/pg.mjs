@@ -109,7 +109,8 @@ export const U2A = ["ADD_PACKAGING_FOUNDATION.sql", "ADD_STOCK_COUNT_START_V2.sq
 // Applied by the suites that test them, in Production order (after U2a).
 export const LOG_USE = ["ADD_ATOMIC_LOG_USE.sql"];
 export const LOG_EDIT = ["ADD_ATOMIC_LOG_EDIT.sql"];
-const SKIP = new Set([...CHAIN, ...U2A, ...LOG_USE, ...LOG_EDIT, "ADD_HISTORICAL_EVIDENCE_BACKFILL.sql"]);
+export const RELEASE = ["ADD_RELEASE_CONTROL.sql"];
+const SKIP = new Set([...CHAIN, ...U2A, ...LOG_USE, ...LOG_EDIT, ...RELEASE, "ADD_HISTORICAL_EVIDENCE_BACKFILL.sql"]);
 
 /**
  * Builds the pre-U2a schema: supabase_schema.sql, the older ADD_*.sql files
@@ -135,6 +136,7 @@ export async function buildBaseSchema(c) {
 export async function applyU2a(c) { for (const f of U2A) await c.query(readRoot(f)); }
 export async function applyLogUse(c) { for (const f of LOG_USE) await c.query(readRoot(f)); }
 export async function applyLogEdit(c) { for (const f of LOG_EDIT) await c.query(readRoot(f)); }
+export async function applyRelease(c) { for (const f of RELEASE) await c.query(readRoot(f)); }
 
 /** Runs `sql`; returns null on success or "message/detail" on error (never throws). Inside inTx each statement gets a savepoint. */
 export async function err(c, sql, params) {

@@ -8,6 +8,7 @@ import { startDecision } from "./countScope";
 import { countedFields } from "./countEvidence";
 import { linePackaging, planCount, entryFor, entryMode, switchEntry, sameCount } from "./countEntry";
 import { unitLabel } from "./units";
+import { releaseRefusalMessage, setBusy } from "./releaseGuard";
 
 const T = {
   primary: "var(--primary)",
@@ -141,6 +142,12 @@ export default function StockCount({ reagents, departments, username, reload, wa
   const [countModes, setCountModes] = useState({}); // itemId -> "packages" when "Calculate using packages" was chosen
   const [countSwitchError, setCountSwitchError] = useState({}); // itemId -> why a switch was refused
   const countSavingRef = useRef(new Set());
+  // Release control: unsaved count entries or a save in flight keep an outdated
+  // page from reloading itself (releaseGuard.js).
+  useEffect(() => {
+    setBusy("stock-count", Object.keys(countDrafts).length > 0 || Object.values(countSaving).some(Boolean));
+  }, [countDrafts, countSaving]);
+  useEffect(() => () => setBusy("stock-count", false), []);
   // In-flight guard against double submission (double clicks, or a click
   // while the first request chain is still running). The ref is the source of
   // truth and is taken synchronously, before any await; the state copy only
@@ -411,6 +418,7 @@ export default function StockCount({ reagents, departments, username, reload, wa
     const result = await startCount(dept);
     if (result.status === "ok") return;
     if (result.status === "no_items") { setNotice(`There are no lots in ${scopeName(dept)} to count.`); return; }
+    if (result.status === "release") { setNotice(result.message); return; }
     if (result.status === "scope_conflict") {
       // Another device opened a count after the check above: re-read and continue/explain.
       const now = await readOpenCounts();
@@ -483,7 +491,8 @@ export default function StockCount({ reagents, departments, username, reload, wa
     countSavingRef.current.delete(it.id);
     setCountSaving((s) => ({ ...s, [it.id]: false }));
     if (error) {
-      setCountSaveError((e) => ({ ...e, [it.id]: "This count wasn't saved. Your entry is kept — check the connection, then leave the field again to retry." }));
+      const why = releaseRefusalMessage(error) || "This count wasn't saved. Your entry is kept — check the connection, then leave the field again to retry.";
+      setCountSaveError((e) => ({ ...e, [it.id]: why }));
       return;
     }
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, counted_quantity: next, ...observed } : x)));
@@ -514,15 +523,18 @@ export default function StockCount({ reagents, departments, username, reload, wa
   async function countCall(fn, args) {
     try {
       const { data, error } = await supabase.rpc(fn, args);
+      if (error) { const rel = releaseRefusalMessage(error); if (rel) return { status: "release", message: rel }; }
       return !error && data && data.status ? data : { status: "error" };
-    } catch {
-      return { status: "error" };
+    } catch (e) {
+      const rel = releaseRefusalMessage(e);
+      return rel ? { status: "release", message: rel } : { status: "error" };
     }
   }
 
   function resultMessage(r) {
     switch (r.status) {
       case "ok": return null;
+      case "release": return r.message;
       case "already_resolved": return "This line was already resolved (on another device or by an earlier attempt). Showing the saved result.";
       case "stale_line": return "This line changed since it was loaded, so nothing was saved. Please review it again.";
       case "stale_allocation": return "This line's usage entries changed since they were loaded, so nothing was changed. Please review its dates again.";

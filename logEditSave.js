@@ -26,6 +26,7 @@
 
 import { newLogId, checkUseAmount } from "./logUseSave";
 import { unitLabel } from "./units";
+import { releaseRefusalMessage } from "./releaseGuard";
 
 export const newRequestId = newLogId;
 
@@ -81,6 +82,9 @@ function refused(r, kind, unit) {
 }
 
 export function describeEditError(e, kind) {
+  // Maintenance / outdated build (ADD_RELEASE_CONTROL.sql): say so plainly.
+  const rel = releaseRefusalMessage(e);
+  if (rel) return rel;
   const msg = String(e?.message || "");
   if (e?.code === "PGRST202" || /could not find the function|function .*log_(edit|undo).* does not exist/i.test(msg)) return `${kind === "undo" ? "Undo" : "Editing"} isn't available yet: the database update for it hasn't been applied. Nothing was saved. Please tell the owner.`;
   if (e?.code === "42501" || /row-level security|permission denied/i.test(msg)) return "You don't have permission to do this, so nothing was saved. Ask the owner to check your account.";

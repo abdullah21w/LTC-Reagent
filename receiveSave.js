@@ -29,6 +29,8 @@
 // entry to be written in the same database transaction as the Lot (a separate,
 // gated database batch).
 
+import { releaseRefusalMessage } from "./releaseGuard";
+
 export function newReceiptId() {
   const c = globalThis.crypto;
   if (c?.randomUUID) return c.randomUUID();
@@ -79,6 +81,9 @@ const isDuplicateReceipt = (e) => e?.code === "23505" && /reagents_pkey/.test(`$
 
 // A clear sentence for a refused receipt. Every message says nothing was saved.
 export function describeReceiveError(e) {
+  // Maintenance / outdated build (ADD_RELEASE_CONTROL.sql): say so plainly.
+  const rel = releaseRefusalMessage(e);
+  if (rel) return rel;
   const msg = String(e?.message || "");
   if (e?.code === "42501" || /row-level security|permission denied/i.test(msg)) return "You don't have permission to receive stock, so nothing was saved. Ask the owner to check your account.";
   if (e?.code === "23514") return `The database refused one of the values (${(msg.match(/constraint "([^"]+)"/) || [])[1] || "check failed"}). Nothing was saved — correct it and try again.`;
