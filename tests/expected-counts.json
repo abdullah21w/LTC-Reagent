@@ -30,6 +30,9 @@
     },
     "unit/releaseGuard.test.mjs": {
       "Release control · browser rules (releaseGuard.js)": 15
+    },
+    "unit/sourceIntegrity.test.mjs": {
+      "Source integrity · no undefined names (purgeReagent regression)": 6
     }
   },
   "ui": {

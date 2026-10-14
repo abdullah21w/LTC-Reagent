@@ -70,7 +70,8 @@ await shut();
 // 4. App wiring
 const app = readSource("App.jsx");
 const ed = app.slice(app.indexOf("async function saveEditedLog("), app.indexOf("async function deleteLog("));
-const un = app.slice(app.indexOf("async function deleteLog("), app.indexOf("async function purgeLog("));
+const unStart = app.indexOf("async function deleteLog(");
+const un = app.slice(unStart, app.indexOf("\n  async function ", unStart)); // deleteLog's own body only (the next function, purgeReagent, erases on purpose)
 check("edit: through saveLogEdit only; Spread refused before anything is sent; the old multi-write path is gone", [ed.includes("saveLogEdit({ client: supabase, request: {"), ed.includes("if (updated.spreadMode) return SPREAD_UNAVAILABLE;"), /from\("reagents"\)|from\("consumption_logs"\)|Math\.max\(0|buildSpreadEntries/.test(ed), /buildSpreadEntries/.test(app)], [true, true, false, false]);
 check("undo: the same confirmation, one undo per entry at a time, through saveLogUndo with a fresh request id; no direct writes", [un.includes('confirm("Remove this log entry? The amount will be added back to stock, but it stays in Reports for audit purposes.")'), un.includes("if (undoInFlight.current.has(log.id)) return;"), un.includes("saveLogUndo({ client: supabase, request: { requestId: newRequestId(), log }, actor: username })"), /from\("reagents"\)|from\("consumption_logs"\)|logActivity\(/.test(un)], [true, true, true, false]);
 check("the window closes only on a confirmed save; a stale refusal reloads the data", [/if \(result\.ok\) \{\s*setEditLog\(null\);\s*loadAll\(\);\s*return;\s*\}/.test(ed), ed.includes('if (result.outcome === "stale" || result.outcome === "log_not_found") loadAll();')], [true, true]);

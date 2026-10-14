@@ -534,6 +534,15 @@ export default function App() {
     if (!result.ok || result.message) alert(result.message || "This entry was not undone.");
   }
 
+  async function purgeReagent(id) {
+    if (role !== "owner") return;
+    if (!confirm("Permanently erase this record? This cannot be undone and it will disappear from Reports too.")) return;
+    const item = reagents.find((r) => r.id === id);
+    await supabase.from("reagents").delete().eq("id", id);
+    await logActivity("purge", "reagent", item ? `${item.name} — Lot ${item.lot_number}` : id);
+    loadAll();
+  }
+
   async function purgeLog(id) {
     if (role !== "owner") return;
     const log = logs.find((l) => l.id === id);
