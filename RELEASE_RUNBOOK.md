@@ -44,22 +44,25 @@ reported by running copies of the app, and the last 10 changes.
    again.
 2. Apply the release's SQL files (if any) and run their VERIFY files.
 3. Push / deploy. Wait until Vercel shows the deployment **Ready**.
-4. Open the app in your browser (it reports its build to the database). Check:
-   ```sql
-   select ltc_release_state();
-   ```
-   The new commit id must appear under `builds_seen`.
+4. **Confirm the deployment yourself** — the database can't see Vercel, and a
+   build appearing as "reported" is not proof (anyone with the public app key
+   could report any id). All three must agree on the new commit id:
+   - Vercel shows the deployment **Ready** for that commit;
+   - https://ltc-reagent.vercel.app/version.json shows `{"build":"<that commit id>"}`;
+   - after you open the app in your browser, `select ltc_release_state();`
+     lists it under `builds_seen`.
 5. Do the read-only checks for the release.
 6. **Approve and reopen** — exactly this build, nothing else:
    ```sql
-   select ltc_release_open('<full commit id>', 'Release <name> verified');
+   select ltc_release_open('<full commit id>', 'Release <name> verified', p_deployment_verified => true);
    ```
    Pages already on the new version continue by themselves; older pages
    reload themselves when nothing is being entered.
 
-`ltc_release_open` refuses a build that no running copy of the app has
-reported in the last 2 hours — so a typo, or a deployment that failed, can
-never reopen the system.
+`ltc_release_open` refuses unless you pass `p_deployment_verified => true`
+(your confirmation of step 4), and refuses a build that no running copy of the
+app has reported in the last 2 hours — so a typo, or a deployment that failed,
+can't reopen the system by accident.
 
 ## Maintenance without a release (e.g. data repair)
 
@@ -76,10 +79,11 @@ select ltc_maintenance_off('Repair finished');
    select ltc_maintenance_on('Release <name> broken: <symptom>');
    ```
 2. Vercel → Deployments → the previous good deployment → **Instant Rollback**.
-3. Open the app in your browser so the previous build reports in.
+3. Check https://ltc-reagent.vercel.app/version.json shows the previous
+   commit, then open the app in your browser so it reports in.
 4. Approve the previous build:
    ```sql
-   select ltc_release_rollback('<previous full commit id>', 'Rolled back: <why>');
+   select ltc_release_rollback('<previous full commit id>', 'Rolled back: <why>', p_deployment_verified => true);
    ```
    Pages on the broken version are refused by the database and reload to the
    previous version.
@@ -92,13 +96,14 @@ normal tools (undo / edit / Edit Lot / Stock Count) or as owner in SQL.
 | Situation | Do this |
 |---|---|
 | Vercel deployment failed | Stay in maintenance. Fix and redeploy, then continue at step 4 — or roll back as above. The failed build can't be approved (it never reported). |
-| Nobody can save and the cause is the build check (e.g. Vercel did not provide the commit id, so the app reports `dev`) | `select ltc_enforcement_set(false, '<why>');` — the build check is off, maintenance still works. Fix, then `select ltc_release_open('<commit id>', '<why>');` |
-| The app can't be opened at all, but you must approve a known commit | `select ltc_release_open('<full commit id>', '<why>', p_force => true);` — only if you are sure the commit is what Vercel serves. |
+| Nobody can save and the cause is the build check (e.g. Vercel did not provide the commit id, so the app and /version.json say `dev`) | `select ltc_enforcement_set(false, '<why>');` — the build check is off, maintenance still works. Fix, then `select ltc_release_open('<commit id>', '<why>', p_deployment_verified => true);` |
+| The app can't be opened at all, but you must approve a known commit | `select ltc_release_open('<full commit id>', '<why>', p_deployment_verified => true, p_force => true);` — only if Vercel and /version.json confirm the commit. |
 | Maintenance switch keeps timing out | A save is stuck. Wait a minute and retry, or pass a longer wait: `select ltc_maintenance_on('<why>', null, interval '60 seconds');` |
 | The release control itself is faulty | Prefer `ltc_enforcement_set(false, …)` and `ltc_maintenance_off(…)`. Last resort: `ROLLBACK_RELEASE_CONTROL.sql` (removes it; no inventory touched; the audit trail is kept). |
 
 ## Never
 
 - Never delete or "roll back" inventory rows to undo a release.
-- Never use `p_force => true` for a commit you have not confirmed is deployed.
+- Never pass `p_deployment_verified => true` or `p_force => true` without
+  checking Vercel and /version.json for that exact commit.
 - Never share these commands with staff; they need no access to them.

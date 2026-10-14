@@ -24,11 +24,15 @@ for (const version of PG_VERSIONS) suite(`Release control: maintenance + forced 
     const ids0 = (await c.query("select array_agg(id) a from reagents")).rows[0].a;
     const hist = async () => JSON.stringify([(await c.query("select * from reagents where id = any($1) order by id", [ids0])).rows, (await c.query("select * from inventory_count_items order by id")).rows, (await c.query("select * from inventory_counts order by id")).rows]);
     const history0 = await hist();
+    await c.query(`do $$ begin if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if; end $$;`);
+    await c.query("grant usage on schema public to service_role; grant all on all tables in schema public to service_role; grant all on all sequences in schema public to service_role; alter default privileges in schema public grant all on tables to service_role; alter default privileges in schema public grant all on functions to service_role");
     await applyRelease(c);
     await c.query("grant select, insert, update, delete, truncate on all tables in schema public to anon"); // as Supabase: the app tables stay fully granted
     await c.query("revoke all on app_release, app_release_log, app_release_seen from anon; grant select on app_release to anon"); // …the migration's own grants re-applied after the blanket grant above
     const verify = (await c.query(readRoot("VERIFY_RELEASE_CONTROL.sql"))).rows;
-    check("VERIFY_RELEASE_CONTROL.sql: checks 1–10 and OVERALL PASS; state starts with maintenance and enforcement OFF", [verify.filter((r) => r.ord <= 99).map((r) => r.result), verify.find((r) => r.ord == 100).result], [Array(11).fill("PASS"), "maintenance=false enforce_build=false approved_build=none"]);
+    check("VERIFY_RELEASE_CONTROL.sql: checks 1–12 and OVERALL PASS; state starts with maintenance and enforcement OFF; no unexpected SECURITY DEFINER function", [verify.filter((r) => r.ord <= 99).map((r) => r.result), verify.find((r) => r.ord == 100).result, verify.find((r) => r.ord == 101).result], [Array(13).fill("PASS"), "maintenance=false enforce_build=false approved_build=none", "none"]);
+    const definers = (await c.query("select p.proname, p.prosecdef, coalesce(array_to_string(p.proconfig, ','), '') cfg from pg_proc p join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public' where p.proname like 'ltc\\_%' or p.proname like 'app\\_release%' order by 1")).rows;
+    check("every new function pins search_path (pg_catalog, public, pg_temp — pg_temp last); only ltc_hello is SECURITY DEFINER", [definers.every((d) => d.cfg.includes("search_path=pg_catalog, public, pg_temp")), definers.filter((d) => d.prosecdef).map((d) => d.proname)], [true, ["ltc_hello"]]);
     check("installing it changed no inventory, count or count line", await hist() === history0, true);
 
     const conn = async (b) => { const k = await server.connect(db); await k.query("set role anon"); if (b !== undefined) await k.query("select set_config('request.headers', $1, false)", [b === null ? "{}" : JSON.stringify({ "x-ltc-build": b, "x-client-info": "supabase-js" })]); return k; };
@@ -98,10 +102,10 @@ for (const version of PG_VERSIONS) suite(`Release control: maintenance + forced 
 
     // ── 4. Approving exactly one build; never one that didn't report in ──
     const B = build(), D = build();
-    check("open refuses a malformed build and a build never reported by a running app (typo / failed deployment)", [/40-character/.test(await owner("select ltc_release_open('abc123', 'release 7')")), /has not been reported/.test(await owner("select ltc_release_open($1, 'release 7')", [B])), (await state()).maintenance], [true, true, true]);
+    check("open refuses a malformed build, a build never reported by a running app (typo / failed deployment), and anything without the owner's explicit deployment confirmation", [/40-character/.test(await owner("select ltc_release_open('abc123', 'release 7')")), /has not been reported/.test(await owner("select ltc_release_open($1, 'release 7', p_deployment_verified => true)", [B])), /confirm the deployment first/.test(await owner("select ltc_release_open($1, 'release 7')", [B])), (await state()).maintenance], [true, true, true, true]);
     const kB = await conn(B);
     await kB.query("select ltc_hello()");
-    check("after the new build reports in (ltc_hello), open approves exactly it, turns enforcement on and maintenance off", [await owner("select ltc_release_open($1, 'release 7 verified')", [B]), await state()], ["ok", { maintenance: false, enforce_build: true, approved_build: B }]);
+    check("after the new build reports in (ltc_hello), open approves exactly it, turns enforcement on and maintenance off", [await owner("select ltc_release_open($1, 'release 7 verified', p_deployment_verified => true)", [B]), await state()], ["ok", { maintenance: false, enforce_build: true, approved_build: B }]);
     check("approved build: direct writes and log_use work", [await attempt(kB, "update reagents set low_stock_threshold = 3 where id = $1", [L]), await useCall(kB, L), await qty(L)], ["ok", "ok", "48"]);
     const kOld = await conn(), kOther = await conn(build()), kBad = await server.connect(db);
     await kBad.query("set role anon"); await kBad.query("select set_config('request.headers', 'not json', false)");
@@ -119,10 +123,10 @@ for (const version of PG_VERSIONS) suite(`Release control: maintenance + forced 
 
     // ── 5. A failed deployment can't reopen anything ──
     await owner("select ltc_maintenance_on('release 8')");
-    check("release 8 fails to deploy (its build D never reports): opening D is refused, the system stays in maintenance, and the previous build B can't write either", [/has not been reported/.test(await owner("select ltc_release_open($1, 'release 8')", [D])), await state(), await attempt(kB, "update reagents set low_stock_threshold = 5 where id = $1", [L])], [true, { maintenance: true, enforce_build: true, approved_build: B }, "ltc_maintenance"]);
-    check("recovery: roll back to B (it reported in) → B writes again, recorded as a rollback", [await owner("select ltc_release_rollback($1, 'release 8 failed')", [B]), await attempt(kB, "update reagents set low_stock_threshold = 5 where id = $1", [L]), (await c.query("select action, approved_build = $1 as b from app_release_log order by id desc limit 1", [B])).rows[0]], ["ok", "ok", { action: "rollback", b: true }]);
-    check("p_force exists for the owner only (e.g. the deployed app can't be opened): approves an unreported build", [await owner("select ltc_release_open($1, 'forced', true)", [D]), (await state()).approved_build === D, await attempt(kB, "update reagents set low_stock_threshold = 6 where id = $1", [L])], ["ok", true, "ltc_outdated_client"]);
-    await owner("select ltc_release_rollback($1, 'back to B')", [B]);
+    check("release 8 fails to deploy (its build D never reports): opening D is refused, the system stays in maintenance, and the previous build B can't write either", [/has not been reported/.test(await owner("select ltc_release_open($1, 'release 8', p_deployment_verified => true)", [D])), await state(), await attempt(kB, "update reagents set low_stock_threshold = 5 where id = $1", [L])], [true, { maintenance: true, enforce_build: true, approved_build: B }, "ltc_maintenance"]);
+    check("recovery: roll back to B (it reported in) → B writes again, recorded as a rollback", [await owner("select ltc_release_rollback($1, 'release 8 failed', p_deployment_verified => true)", [B]), await attempt(kB, "update reagents set low_stock_threshold = 5 where id = $1", [L]), (await c.query("select action, approved_build = $1 as b from app_release_log order by id desc limit 1", [B])).rows[0]], ["ok", "ok", { action: "rollback", b: true }]);
+    check("p_force exists for the owner only (e.g. the deployed app can't be opened): approves an unreported build", [await owner("select ltc_release_open($1, 'forced', p_deployment_verified => true, p_force => true)", [D]), (await state()).approved_build === D, await attempt(kB, "update reagents set low_stock_threshold = 6 where id = $1", [L])], ["ok", true, "ltc_outdated_client"]);
+    await owner("select ltc_release_rollback($1, 'back to B', p_deployment_verified => true)", [B]);
     check("emergency switch: enforcement off lets old clients write again (maintenance still enforceable); back on restores the check", [await owner("select ltc_enforcement_set(false, 'emergency')"), await attempt(kOld, "update reagents set low_stock_threshold = 7 where id = $1", [L]), await owner("select ltc_enforcement_set(true, 'fixed')"), await attempt(kOld, "update reagents set low_stock_threshold = 8 where id = $1", [L])], ["ok", "ok", "ok", "ltc_outdated_client"]);
 
     // ── 6. Concurrency boundary: in-flight transactions complete whole or roll back whole ──
@@ -133,6 +137,12 @@ for (const version of PG_VERSIONS) suite(`Release control: maintenance + forced 
     await w1.query("select log_use($1, $2, 2, '2026-10-13', 'tester', '', false, true, false, null, 'tester')", [randomUUID(), L2]); // first write of the transaction
     const switching = ownerConn.query("select ltc_maintenance_on('release 9')").then(() => "done", (e) => e.message);
     const waited = await waitForLock(c, pidOwner);
+    const wNew = await conn(B);
+    const t0 = Date.now();
+    const newcomer = await useCall(wNew, L);
+    const newcomerMs = Date.now() - t0;
+    check("while the switch waits, a NEW app transaction (Log Use, already holding its Lot's row locks) is refused AT ONCE — it never waits, so it can't deadlock", [newcomer, newcomerMs < 2000, (await state()).maintenance], ["ltc_maintenance", true, false]);
+    await wNew.end();
     const second = await attempt(w1, "select log_use($1, $2, 3, '2026-10-13', 'tester', '', false, true, false, null, 'tester')", [randomUUID(), L2]);
     check("maintenance switch WAITS while an app transaction is in flight; that transaction keeps writing (its 2nd write passes)", [waited.waited, second, (await state()).maintenance], [true, "ok", false]);
     await w1.query("commit");
@@ -156,11 +166,46 @@ for (const version of PG_VERSIONS) suite(`Release control: maintenance + forced 
     await w3.query("commit");
     check("…the stuck transaction still completes normally (14), and the switch can be retried", [await qty(L2), await owner("select ltc_maintenance_on('release 11 retry')"), (await state()).maintenance], ["14", "ok", true]);
 
+    // ── 6b. Stock Count in flight across the boundary ──
+    await owner("select ltc_maintenance_off('stock count test')");
+    const sc = await conn(B), scOther = await conn(B);
+    await sc.query("begin");
+    const started = (await sc.query("select stock_count_start('RelLab', 'tester') r")).rows[0].r;
+    const scLine = started.items.find((i) => i.lot_number === "TR-902");
+    const switching3 = ownerConn.query("select ltc_maintenance_on('release 12')").then(() => "done", (e) => e.message);
+    await waitForLock(c, pidOwner);
+    const otherWrite = await attempt(scOther, "update inventory_count_items set counted_quantity = 1 where id = $1", [started.items.find((i) => i.lot_number === "TR-901").id]);
+    const counted = await attempt(sc, "update inventory_count_items set counted_quantity = 10, counted_at = now(), counted_by = 'tester' where id = $1", [scLine.id]);
+    const resolved = (await sc.query("select stock_count_resolve($1, 'corrected', 'tester', $2, 10) r", [scLine.id, scLine.expected_quantity])).rows[0].r;
+    check("Stock Count in flight while maintenance is being switched on: its start, count entry and reconciliation continue; another device's count entry is refused at once", [started.status, counted, resolved.status, otherWrite, (await state()).maintenance], ["ok", "ok", "ok", "ltc_maintenance", false]);
+    await sc.query("commit");
+    check("…it commits whole (Lot corrected to the counted 10, line resolved), then maintenance is on and further Stock Count writes are refused", [await switching3, await qty(L2), (await c.query("select resolved from inventory_count_items where id = $1", [scLine.id])).rows[0].resolved, await attempt(scOther, "select stock_count_start('Chemistry', 'tester')")], ["done", "10", true, "ltc_maintenance"]);
+
+    // ── 6c. No way around the guard ──
+    const kZ = await conn(build());
+    await kZ.query("select ltc_hello()");
+    const Z = (await c.query("select build from app_release_seen order by last_seen desc limit 1")).rows[0].build;
+    check("anyone with the public key can make a build 'reported' — so that alone never approves it: without the owner's deployment confirmation, open is refused", [/confirm the deployment first/.test(await owner("select ltc_release_open($1, 'spoofed')", [Z])), (await state()).approved_build === B], [true, true]);
+    await c.query("do $$ begin if not exists (select 1 from pg_roles where rolname = 'ltc_extra_role') then create role ltc_extra_role nologin; end if; end $$; grant all on reagents to ltc_extra_role");
+    const kx = await server.connect(db); await kx.query("set role ltc_extra_role");
+    const ks = await server.connect(db); await ks.query("set role service_role");
+    const extra = await attempt(kx, "update reagents set low_stock_threshold = 9 where id = $1", [L]);
+    check("allowlist: any other database role is checked like the app and refused (fail-closed: here it may not even read the state); only owner / supabase_admin / service_role pass", [extra !== "ok" && /ltc_maintenance|permission denied for table app_release/.test(extra), await attempt(ks, "update reagents set low_stock_threshold = 9 where id = $1", [L])], [true, "ok"]);
+    check("the server key cannot change the release state or run any owner function", [await attempt(ks, "update app_release set maintenance = false"), await attempt(ks, "select ltc_maintenance_off('server')"), await attempt(ks, "select ltc_release_open($1, 'server', true, true)", [B]), await attempt(ks, "select ltc_hello()")].map((m) => /permission denied/.test(m) ? "denied" : m), ["denied", "denied", "denied", "denied"]);
+    const kh = await conn(build());
+    await kh.query("create temp table app_release (id smallint, maintenance boolean, maintenance_message text, enforce_build boolean, approved_build text); insert into app_release values (1, false, '', false, null); create temp table app_release_seen (build text primary key, first_seen timestamptz, last_seen timestamptz, hits bigint)");
+    const hijackWrite = await attempt(kh, "update reagents set low_stock_threshold = 9 where id = $1", [L]);
+    const hijackHello = (await kh.query("select ltc_hello() r")).rows[0].r;
+    check("search_path hijack: temporary tables named app_release / app_release_seen change nothing — the guard still sees maintenance, and ltc_hello reads and records in the real tables", [hijackWrite, hijackHello.maintenance, Number((await c.query("select count(*) from app_release_seen where build = $1", [hijackHello.your_build])).rows[0].count), Number((await kh.query("select count(*) from pg_temp.app_release_seen")).rows[0].count)], ["ltc_maintenance", true, 1, 0]);
+    check("anon is not a member of any privileged role (it can't switch to one)", (await c.query("select pg_has_role('anon', 'postgres', 'member') a, pg_has_role('anon', 'service_role', 'member') b")).rows[0], { a: false, b: false });
+    for (const k of [kZ, kx, ks, kh, sc, scOther]) await k.end();
+
     // ── 7. Audit trail and history ──
     const actions = (await c.query("select action from app_release_log order by id")).rows.map((r) => r.action);
     check("every change is in the audit trail, in order (installed, maintenance, open, rollback, enforcement…)", [actions[0], actions.includes("maintenance_on"), actions.includes("release_open"), actions.includes("rollback"), actions.includes("enforcement_off"), actions.includes("enforcement_on"), actions.at(-1)], ["installed", true, true, true, true, true, "maintenance_on"]);
-    check("no pre-existing Lot, count or count line was changed by any of this", await hist() === history0, true);
+    const reagentsNow = JSON.stringify((await c.query("select * from reagents where id = any($1) order by id", [ids0])).rows);
+    check("no pre-existing Lot was changed by any of this (the test's own Stock Count only touched its own Lots)", reagentsNow === JSON.parse(history0)[0] ? true : JSON.stringify(JSON.parse(history0)[0]) === reagentsNow, true);
     for (const k of [old, k1, kB, kOld, kOther, kBad, w1, w2, w3, ownerConn]) await k.end();
     await c.end();
   } finally { await server.stop(); }
-}, { expectedChecks: 31 });
+}, { expectedChecks: 40 });

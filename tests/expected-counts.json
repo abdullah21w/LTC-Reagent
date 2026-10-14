@@ -117,7 +117,7 @@
       "Atomic log edit / undo (PostgreSQL {v})": 39
     },
     "pg/releaseControl.test.mjs": {
-      "Release control: maintenance + forced update (PostgreSQL {v})": 31
+      "Release control: maintenance + forced update (PostgreSQL {v})": 40
     }
   }
 }

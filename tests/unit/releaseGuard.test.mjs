@@ -37,7 +37,8 @@ check("…and other errors keep their existing messages", [/database update for 
 // wiring
 const BI = await load("buildInfo.js");
 check("build id: 'dev' when not built by Vercel", BI.BUILD, "dev");
-check("vite.config.js bakes Vercel's commit id into the app", /__LTC_BUILD__: JSON\.stringify\(process\.env\.VERCEL_GIT_COMMIT_SHA \|\| process\.env\.LTC_BUILD \|\| "dev"\)/.test(readSource("vite.config.js")), true);
+const vc = readSource("vite.config.js");
+check("vite.config.js bakes Vercel's commit id into the app AND publishes it at /version.json (for the owner's deployment check)", [vc.includes('const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA || process.env.LTC_BUILD || "dev";'), vc.includes("__LTC_BUILD__: JSON.stringify(BUILD_ID)"), vc.includes('fileName: "version.json", source: JSON.stringify({ build: BUILD_ID })'), vc.includes("plugins: [react(), versionJson]")], [true, true, true, true]);
 check("every database request from the app carries x-ltc-build", readSource("supabaseClient.js").includes('createClient(url, key, { global: { headers: { "x-ltc-build": BUILD } } })'), true);
 const api = ["api/_reportBuilder.js", "api/send-2fa-code.js", "api/send-backup.js", "api/send-expiry-alerts.js", "api/send-monthly-report.js"];
 check("every serverless call to the database carries x-ltc-build (Vercel's commit id), so cron jobs aren't refused", api.map((f) => { const t = readSource(f); return (t.match(/apikey: SUPABASE_KEY/g) || []).length === (t.match(/"x-ltc-build": process\.env\.VERCEL_GIT_COMMIT_SHA \|\| "dev"/g) || []).length; }), [true, true, true, true, true]);
