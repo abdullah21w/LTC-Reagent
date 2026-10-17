@@ -56,7 +56,7 @@ for (const version of PG_VERSIONS) suite(`Edit Lot · set a lot's missing device
     const logs = (await c.query("select * from consumption_logs")).rows.map((l) => ({ ...l, amount: Number(l.amount), date: new Date(l.date).toISOString().slice(0, 10) }));
     const env = { snoozes: [], warnDays: 30, today: "2026-10-17", compareLots: (a, b) => (a.expiry_date < b.expiry_date ? -1 : 1), daysBetween: (a, b) => (new Date(a) - new Date(b)) / 86400000, hasInspectionIssue: () => false, isExpiringSoonItem: () => false };
     const erf = E.buildGroups(all, logs, env).filter((g) => g.name === "ERF");
-    check("the reagent list now shows ERF ONCE (ERF::VITROS) with both lots, FEFO order, 2 BOX in stock, L3470's usage counted", [erf.length, erf[0].key, erf[0].items.map((i) => i.lot_number), erf[0].totalQty, erf[0].recentUsed], [1, "ERF::VITROS", ["L3470", "A3826"], 2, 3]);
+    check("the reagent list now shows ERF ONCE (ERF::VITROS) with both lots (usable A3826 first, empty L3470 still listed), 2 BOX in stock, Stable (the lot emptied by Log Use / Stock Count no longer makes it Critical), L3470's usage counted", [erf.length, erf[0].key, erf[0].items.map((i) => i.lot_number), erf[0].totalQty, erf[0].recentUsed, erf[0].status, erf[0].fefo.lot_number], [1, "ERF::VITROS", ["A3826", "L3470"], 2, 3, "green", "A3826"]);
     const usedNew = (await editor.query("select log_use(gen_random_uuid(), $1, 1, '2026-10-17', 'tester', '', false, true, false, null, 'tester') r", [A3826])).rows[0].r.status;
     check("Log Use on the lot afterwards works as before (stock 2 → 1)", [usedNew, (await row(A3826)).current_quantity], ["ok", "1"]);
     for (const k of [editor, other, c]) await k.end();

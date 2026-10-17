@@ -129,6 +129,22 @@ export function lowEvidenceLabel(evidence) {
   return evidence.category === "corrections_only" ? "Low evidence: based only on stock-count corrections" : "Low evidence: based on a single usage log";
 }
 
+// ─── Stock rules (zero-quantity lots) ───────────────────────────────────────
+// A lot HAS STOCK when its current quantity is above 0, and is USABLE when it
+// has stock and isn't expired. A lot with nothing left stays an active record
+// (All lots, history, Stock Count) but is never counted as stock: on its own it
+// doesn't make a reagent Critical, never takes USE FIRST / FEFO and never sets a
+// unit's low-stock threshold. Nothing here changes a quantity.
+export const lotHasStock = (lot) => Number(lot?.current_quantity) > 0;
+const lotExpiredOn = (lot, todayISO) => !!lot?.expiry_date && daysBetweenISO(lot.expiry_date, todayISO) < 0;
+export const lotIsUsable = (lot, todayISO) => lotHasStock(lot) && !lotExpiredOn(lot, todayISO);
+// FEFO order (compareLots) with usable lots first, then expired lots that still
+// hold stock (to discard), then empty lots.
+export function stockOrder(lots, compareLots, todayISO) {
+  const rank = (l) => (lotIsUsable(l, todayISO) ? 0 : lotHasStock(l) ? 1 : 2);
+  return [...(lots || [])].sort((a, b) => rank(a) - rank(b) || compareLots(a, b));
+}
+
 // One part per base unit of a group. `items` = the group's active lots in
 // their stored order, `sorted` = the same lots in FEFO order, `usage` =
 // recentUsageByGroupUnit(...)[groupKey]. Parts are listed for every unit with
@@ -148,13 +164,15 @@ function unitParts(items, sorted, usage, ctx) {
     const recentUsed = (usage || {})[k] || 0;
     const dailyRate = recentUsed / 30;
     const inStock = lots.length > 0;
-    const threshold = inStock ? lots[0].low_stock_threshold : null;
+    const hasStock = lots.some(lotHasStock);
+    const threshold = inStock ? (lots.find(lotHasStock) || lots[0]).low_stock_threshold : null;
     const predictedDaysLeft = inStock && dailyRate > 0 ? Math.floor(totalQty / dailyRate) : null;
     const evidence = usageEvidence(ctx.groupKey, ctx.reagents, ctx.logs, ctx.today, k);
     return {
       key: k,
       unit: k === UNKNOWN_UNIT ? "(unit not recorded)" : inStock ? mine[0].unit : normalizeUnit(k).label || k,
       inStock,
+      hasStock,
       lots,
       totalQty: inStock ? totalQty : null,
       totalReceived: inStock ? totalReceived : null,
@@ -199,8 +217,12 @@ export function buildGroups(reagents, logs, env) {
   // active lots only.
   const usage = recentUsageByGroupUnit(reagents, logs, today);
   return Object.entries(map).map(([key, items]) => {
-    const sorted = [...items].sort(compareLots);
-    const anyExpiredOrEmpty = items.some((i) => (i.expiry_date && daysBetween(i.expiry_date, today) < 0) || i.current_quantity <= 0);
+    const sorted = stockOrder(items, compareLots, today);
+    // Critical: an expired lot still holds stock (to discard), or no usable stock
+    // is left at all. An empty lot alone is not Critical.
+    const expired = (i) => !!i.expiry_date && daysBetween(i.expiry_date, today) < 0;
+    const expiredWithStock = items.some((i) => lotHasStock(i) && expired(i));
+    const noUsableStock = !items.some((i) => lotHasStock(i) && !expired(i));
     const flagged = items.some(hasInspectionIssue);
     const allParts = unitParts(items, sorted, usage[key], { groupKey: key, reagents, logs, today });
     const parts = allParts.filter((p) => p.inStock);
@@ -210,8 +232,11 @@ export function buildGroups(reagents, logs, env) {
     const activeSnooze = (snoozes || []).find((s) => s.reagent_name === items[0].name && s.device === (items[0].device || "") && s.snoozed_until >= today);
     const lowStock = lowStockRaw && !activeSnooze;
     const snoozedUntil = activeSnooze ? activeSnooze.snoozed_until : null;
-    const expiringSoon = items.some((i) => isExpiringSoonItem(i, warnDays));
-    const worstStatus = anyExpiredOrEmpty ? "red" : (lowStock || expiringSoon) ? "yellow" : "green";
+    const expiringSoon = items.some((i) => lotHasStock(i) && isExpiringSoonItem(i, warnDays));
+    // A unit with no stock left while another unit has usable stock: Watch, never
+    // added together or converted (the unit's own reorder hint stays).
+    const unitsOut = noUsableStock ? [] : parts.filter((p) => !p.hasStock).map((p) => ({ key: p.key, unit: p.unit }));
+    const worstStatus = expiredWithStock || noUsableStock ? "red" : (lowStock || expiringSoon || unitsOut.length > 0) ? "yellow" : "green";
 
     const single = mixedUnits ? null : parts[0];
     const ranked = parts.filter((p) => p.predictedDaysLeft !== null).sort((a, b) => a.predictedDaysLeft - b.predictedDaysLeft);
@@ -226,7 +251,7 @@ export function buildGroups(reagents, logs, env) {
       recentUsed: single ? single.recentUsed : null,
       dailyRate: single ? single.dailyRate : null,
       predictedDaysLeft: forecastPart ? forecastPart.predictedDaysLeft : null,
-      mixedUnits, parts, otherUnitUsage, forecastPart,
+      mixedUnits, parts, otherUnitUsage, forecastPart, unitsOut,
     };
   });
 }
@@ -534,35 +559,44 @@ export function expiryOutlook(fefoLots, dailyRate, todayISO, evidence) {
 export function statusReasons(items, warnDays, todayISO, isSnoozed, snoozedUntil = null) {
   const lots = items || [];
   const reasons = [];
+  // Critical: an expired lot still holding stock, or no usable stock at all.
   for (const i of lots) {
-    if (i.expiry_date && daysBetweenISO(i.expiry_date, todayISO) < 0) reasons.push({ kind: "expired", lotId: i.id, lotNumber: i.lot_number, days: daysBetweenISO(i.expiry_date, todayISO) });
+    if (lotHasStock(i) && lotExpiredOn(i, todayISO)) reasons.push({ kind: "expired", lotId: i.id, lotNumber: i.lot_number, days: daysBetweenISO(i.expiry_date, todayISO) });
   }
-  for (const i of lots) {
-    if (i.current_quantity <= 0) reasons.push({ kind: "empty", lotId: i.id, lotNumber: i.lot_number });
-  }
-  // Low stock per unit (U2b): each unit's lots against the threshold of that
-  // unit's next-to-use lot — quantities in different units are never added.
+  const noUsableStock = !lots.some((i) => lotIsUsable(i, todayISO));
+  if (lots.length > 0 && noUsableStock) reasons.push({ kind: "out_of_stock" });
+  // Per unit (U2b): quantities in different units are never added. Each unit's
+  // lots against the threshold of that unit's first lot with stock.
   const byUnit = new Map();
   for (const i of lots) {
     const k = lotUnitKey(i);
     if (!byUnit.has(k)) byUnit.set(k, []);
     byUnit.get(k).push(i);
   }
+  const withStock = [...byUnit.values()].filter((ls) => ls.some(lotHasStock))
+    .map((ls) => ({ unit: ls[0].unit, totalQty: ls.reduce((s, i) => s + i.current_quantity, 0) }));
   for (const ls of byUnit.values()) {
+    const ref = ls.find(lotHasStock) || ls[0];
     const totalQty = ls.reduce((s, i) => s + i.current_quantity, 0);
-    const threshold = ls[0].low_stock_threshold;
+    const threshold = ref.low_stock_threshold;
     const lowStockRaw = totalQty > 0 && totalQty <= threshold;
-    const unit = ls[0].unit;
-    if (lowStockRaw && !isSnoozed) reasons.push({ kind: "low_stock", totalQty, threshold, unit, lotNumber: ls[0].lot_number });
+    const unit = ref.unit;
+    if (lowStockRaw && !isSnoozed) reasons.push({ kind: "low_stock", totalQty, threshold, unit, lotNumber: ref.lot_number });
     if (lowStockRaw && isSnoozed) reasons.push({ kind: "low_stock_snoozed", totalQty, threshold, unit, snoozedUntil });
+    // Watch: this unit has nothing left while another unit has usable stock.
+    if (!noUsableStock && !ls.some(lotHasStock)) reasons.push({ kind: "unit_out", unit, otherUnits: withStock });
   }
   for (const i of lots) {
-    if (!i.expiry_date) continue;
+    if (!i.expiry_date || !lotHasStock(i)) continue;
     const d = daysBetweenISO(i.expiry_date, todayISO);
     if (d >= 0 && d <= warnDays) reasons.push({ kind: "expiring_soon", lotId: i.id, lotNumber: i.lot_number, days: d });
   }
+  // Information only: empty lots stay recorded (All lots) but aren't stock.
+  for (const i of lots) {
+    if (!lotHasStock(i)) reasons.push({ kind: "empty_lot", lotId: i.id, lotNumber: i.lot_number });
+  }
   const has = (k) => reasons.some((r) => r.kind === k);
-  const status = has("expired") || has("empty") ? "red" : has("low_stock") || has("expiring_soon") ? "yellow" : "green";
+  const status = has("expired") || has("out_of_stock") ? "red" : has("low_stock") || has("expiring_soon") || has("unit_out") ? "yellow" : "green";
   return { status, warnDays, reasons };
 }
 

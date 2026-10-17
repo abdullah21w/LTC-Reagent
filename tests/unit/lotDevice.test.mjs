@@ -58,5 +58,5 @@ check("an edit that doesn't touch the device logs as before (no device note)", a
 const env = { snoozes: [], warnDays: 30, today: "2026-10-17", compareLots: (a, b) => (a.expiry_date < b.expiry_date ? -1 : 1), daysBetween: (a, b) => (new Date(a) - new Date(b)) / 86400000, hasInspectionIssue: () => false, isExpiringSoonItem: () => false };
 const before = E.buildGroups([onVitros, blank], [], env), after = E.buildGroups([onVitros, { ...blank, device: "VITROS" }], [], env);
 check("before: ERF shows twice (one group per device value)", before.map((g) => g.key).sort(), ["ERF::", "ERF::VITROS"]);
-check("after setting the device: ERF is ONE group with both lots in FEFO order and the total of both", [after.length, after[0].key, after[0].items.map((i) => i.lot_number), after[0].totalQty], [1, "ERF::VITROS", ["L3470", "A3826"], 2]);
+check("after setting the device: ERF is ONE group with both lots (the usable A3826 first, the empty L3470 still listed) and the total of both", [after.length, after[0].key, after[0].items.map((i) => i.lot_number), after[0].totalQty], [1, "ERF::VITROS", ["A3826", "L3470"], 2]);
 }, { expectedChecks: 16 });

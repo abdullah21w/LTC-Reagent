@@ -39,6 +39,9 @@
     },
     "unit/receiveChoices.test.mjs": {
       "Receive · explicit device and expiry choice": 20
+    },
+    "unit/usableStock.test.mjs": {
+      "Zero-quantity lots · status, FEFO and units from usable stock": 21
     }
   },
   "ui": {
@@ -74,6 +77,9 @@
     },
     "ui/receiveChoices.test.mjs": {
       "Receive window · explicit device and expiry choice": 12
+    },
+    "ui/usableStock.test.mjs": {
+      "Zero-quantity lots · DetailView, Dashboard and Reorder": 9
     }
   },
   "pg": {

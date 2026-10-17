@@ -18,7 +18,7 @@ import { useRelease, MaintenanceScreen, OwnerMaintenanceBanner, UpdateBanner } f
 import { setBusy } from "./releaseGuard";
 import { BUILD } from "./buildInfo";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
-import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix } from "./forecast";
+import { buildGroups, lotUnitKey, packEquivalent, packEquivalentText, lowEvidenceLabel, runOutDate, usageBreakdown, reorderSuggestion, lotHistory, groupLogsWithLots, lotDiscriminators, expiryOutlook, expiryExceptions, statusReasons, stockAtRisk, groupKeyOf, stockCountHistory, relatedStockGroups, unitMix, lotHasStock, lotIsUsable } from "./forecast";
 
 const DEPT_PALETTE = ["#0F7173", "#B5473A", "#8A5A2B", "#5A6ACF", "#2F8F5B", "#B8860B", "#7A4FA3", "#C1432B"];
 function deptColor(dept, list) {
@@ -126,6 +126,11 @@ const unitText = (u) => String(u ?? "").trim();
 function lotQtyView(lot) {
   const unit = unitText(lot.unit);
   return { main: `${fmtQty(lot.current_quantity)} ${unit}`.trim(), sub: packEquivalentText(lot.current_quantity, packEquivalent([lot]), unit) };
+}
+// The units of a group that still have stock, e.g. "4 box" — for a unit that has
+// nothing left (R2: never added together or converted).
+function otherUnitsInStock(g, exceptKey) {
+  return (g.parts || []).filter((p) => p.hasStock && p.key !== exceptKey).map(partQtyText).join(" · ");
 }
 function partQtyText(p) {
   return `${fmtQty(p.totalQty)} ${unitText(p.unit)}`.trim();
@@ -1388,7 +1393,7 @@ function Dashboard({ groups, counts, departments, devices, logs, reagents, can, 
                             <div style={{ fontSize: 12, color: THEME.textMuted, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.4 }}>
                               <span className="dash-show-sm" style={{ color: THEME.text, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{q.main} · </span>
                               {g.device && <span style={{ fontWeight: 600, color: THEME.textMuted }}>{g.device} · </span>}
-                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, opacity: 0.85 }}>{g.items.length > 1 ? `${g.items.length} lots · nearest ${g.fefo.lot_number}` : `Lot ${g.fefo.lot_number}`}</span>
+                              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, opacity: 0.85 }}>{g.items.filter(lotHasStock).length > 1 ? `${g.items.filter(lotHasStock).length} lots · nearest ${g.fefo.lot_number}` : `Lot ${g.fefo.lot_number}`}</span>
                               {lastLog && <span className="dash-hide-sm" style={{ opacity: 0.85 }}> · last used {lastLog.date}</span>}
                             </div>
                           </div>
@@ -2000,7 +2005,7 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
       const { target, suggestedQty } = reorderSuggestion(p.dailyRate, p.totalQty, coverageDays);
       const unit = unitText(p.unit);
       const packs = p.pack && p.pack.perBox > 1 ? Math.ceil(suggestedQty / p.pack.perBox) : null;
-      return { group: g, rowKey: `${g.key}::${p.key}`, name: g.name, device: g.device, mixed: g.mixedUnits, unit, dailyRate: p.dailyRate, totalQty: p.totalQty, target, suggestedQty, packs, pack: p.pack, lowEvidence: p.lowEvidence, evidence: p.evidence };
+      return { group: g, rowKey: `${g.key}::${p.key}`, name: g.name, device: g.device, mixed: g.mixedUnits, unit, dailyRate: p.dailyRate, totalQty: p.totalQty, target, suggestedQty, packs, pack: p.pack, lowEvidence: p.lowEvidence, evidence: p.evidence, otherStock: p.hasStock ? "" : otherUnitsInStock(g, p.key) };
     }))
     .filter((r) => r.dailyRate > 0 && r.suggestedQty > 0)
     .sort((a, b) => b.suggestedQty - a.suggestedQty);
@@ -2038,7 +2043,7 @@ function ReorderPage({ groups, coverageDays, onSelectGroup }) {
               <tbody>
                 {suggestions.map((r) => (
                   <tr key={r.rowKey} onClick={() => onSelectGroup(r.group)} style={{ borderTop: `1px solid ${THEME.cardBorder}`, cursor: "pointer" }}>
-                    <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name}{r.mixed && <span style={{ fontWeight: 500, color: THEME.textMuted }}> ({r.unit})</span>}</td>
+                    <td style={{ padding: "9px 8px 9px 0", fontWeight: 600, color: THEME.text }}>{r.name}{r.mixed && <span style={{ fontWeight: 500, color: THEME.textMuted }}> ({r.unit})</span>}{r.otherStock && <div data-testid="reorder-other-unit" style={{ fontSize: 11, fontWeight: 500, color: THEME.textMuted }}>No {r.unit} left · {r.otherStock} in stock in a different unit — not converted; check before ordering</div>}</td>
                     <td style={{ padding: "9px 8px", color: THEME.textMuted }}>{r.device || "—"}</td>
                     <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{r.dailyRate.toFixed(1)} {r.unit}</td>
                     <td style={{ padding: "9px 8px", textAlign: "right", color: THEME.textMuted }}>{fmtQty(r.totalQty)} {r.unit}</td>
@@ -2321,7 +2326,9 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const why = statusReasons(group.items, warnDays, today, !!group.snoozedUntil, group.snoozedUntil);
   const reasonText = (r) => {
     if (r.kind === "expired") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> expired {Math.abs(r.days)} day{Math.abs(r.days) === 1 ? "" : "s"} ago → Critical</>;
-    if (r.kind === "empty") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> is empty (0 left) → Critical</>;
+    if (r.kind === "out_of_stock") return <>No usable stock left — every lot is empty or expired → Critical</>;
+    if (r.kind === "unit_out") return <>No {unitText(r.unit)} left — {r.otherUnits.map((o) => `${fmtQty(o.totalQty)} ${unitText(o.unit)}`).join(" · ")} in stock in a different unit (not converted, not added together) → Watch</>;
+    if (r.kind === "empty_lot") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> is empty (0 left) — kept under All lots, not counted as stock</>;
     if (r.kind === "low_stock") return <>Low stock: {fmtQty(r.totalQty)} {unitText(r.unit)} left, at or below the threshold of {fmtQty(r.threshold)} {unitText(r.unit)} → Watch</>;
     if (r.kind === "low_stock_snoozed") return <>Low stock ({fmtQty(r.totalQty)} {unitText(r.unit)}, threshold {fmtQty(r.threshold)}), but the alert is snoozed{r.snoozedUntil ? ` until ${r.snoozedUntil}` : ""}, so it isn't counted</>;
     if (r.kind === "expiring_soon") return <>Lot <span style={{ fontFamily: MONO }}>{lotLabel(r.lotId, r.lotNumber)}</span> {expiresInText(r.days)} (within the {why.warnDays}-day expiry warning) → Watch</>;
@@ -2332,6 +2339,8 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const daysToneOf = (pv) => (pv.daysLeft === null ? null : pv.daysLeft <= 3 ? "red" : pv.daysLeft <= 14 ? "low" : null);
   const lowOf = (pv) => {
     const { unit, totalQty, threshold } = pv;
+    const others = totalQty <= 0 ? otherUnitsInStock(group, pv.key) : "";
+    if (totalQty <= 0 && others) return { tone: "low", text: `No ${unit} left — ${others} in stock in a different unit (not converted, not added together), so this is shown as Watch.` };
     if (totalQty <= 0) return { tone: "red", text: "Out of stock — shown as Critical rather than Low stock." };
     if (pv.lowStockRaw) return { tone: "low", text: `Low stock: ${fmtQty(totalQty)} ${unit} left, at or below the threshold of ${fmtQty(threshold)} ${unit}.${group.snoozedUntil ? ` Alert snoozed until ${group.snoozedUntil}.` : ""}` };
     return { tone: "green", text: `Not low: ${fmtQty(totalQty)} ${unit} left, above the threshold of ${fmtQty(threshold)} ${unit}.` };
@@ -2339,7 +2348,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
   const reorderOf = (pv) => {
     const { unit, totalQty, reorder, avgDaily } = pv;
     if (avgDaily <= 0) return { tone: null, text: `No reorder suggestion — no usage${mixed ? ` in ${unit}` : ""} logged in the last 30 days.` };
-    if (reorder.needed) return { tone: "primary", text: `Suggest ordering ${fmtQty(reorder.suggestedQty)} ${unit} to cover ${coverageDays} days at the current rate.` };
+    if (reorder.needed) { const others = totalQty <= 0 ? otherUnitsInStock(group, pv.key) : ""; return { tone: "primary", text: `Suggest ordering ${fmtQty(reorder.suggestedQty)} ${unit} to cover ${coverageDays} days at the current rate.${others ? ` Note: ${others} in stock in a different unit — not converted; check before ordering.` : ""}` }; }
     return { tone: "green", text: `No reorder needed — ${fmtQty(totalQty)} ${unit} in stock covers the ${coverageDays}-day target of ${fmtQty(reorder.target)} ${unit}.` };
   };
 
@@ -2441,7 +2450,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
-          <ForecastTile label="In stock" value={fmtQty(totalQty)} unit={unit} sub={`Across ${pv.lots.length} lot${pv.lots.length === 1 ? "" : "s"} in stock${pv.packText ? ` · ${pv.packText}` : ""}`} tone={totalQty <= 0 ? "red" : null} />
+          <ForecastTile label="In stock" value={fmtQty(totalQty)} unit={unit} sub={`Across ${pv.lots.filter(lotHasStock).length} lot${pv.lots.filter(lotHasStock).length === 1 ? "" : "s"} in stock${pv.packText ? ` · ${pv.packText}` : ""}`} tone={totalQty <= 0 ? "red" : null} />
           <ForecastTile label="Daily use (30 days)" value={fmtQty(avgDaily)} unit={`${unit}/day`} sub={`${fmtQty(consumed30)} ${unit} used in the last 30 days`} />
           <ForecastTile label="Days left" value={daysLeft === null ? "—" : daysLeft} unit={daysLeft === null ? "" : daysLeft === 1 ? "day" : "days"} sub={daysLeft === null ? "No usage logged in the last 30 days" : lowEvidence ? lowEvidenceText : "At the current usage rate"} tone={daysTone} />
           <ForecastTile
@@ -2498,9 +2507,9 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
         {showHow && (
           <div style={{ marginTop: 10, background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "2px 14px" }}>
             {pv === partViews[0] && <HowRow label={`Status: ${STATUS_META[group.status]?.label || ""}`}>
-              <div>Critical if any lot in stock is expired or empty; Watch if stock is low (and not snoozed) or a lot expires within {why.warnDays} days; otherwise Stable.</div>
+              <div>Critical if no usable stock is left (every lot empty or expired) or an expired lot still holds stock; Watch if stock is low (and not snoozed), a lot with stock expires within {why.warnDays} days, or one unit has run out while another unit still has stock (never converted); otherwise Stable. Empty lots stay under All lots but aren't counted as stock.</div>
               {why.reasons.length === 0 ? (
-                <div>No lot is expired, empty or expiring within {why.warnDays} days, and stock isn't low → Stable.</div>
+                <div>No lot with stock is expired or expiring within {why.warnDays} days, no unit has run out, and stock isn't low → Stable.</div>
               ) : (
                 why.reasons.map((r, i) => <div key={i}>· {reasonText(r)}</div>)
               )}
@@ -2566,7 +2575,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ ...sectionHeading, margin: 0 }}>{lotView === "in_stock" ? "Lots — use earliest expiry first (FEFO)" : "All lots — newest received first"}</div>
         <div role="tablist" style={{ display: "inline-flex", background: "var(--surface-2)", border: `1px solid ${THEME.cardBorder}`, borderRadius: 7, padding: 2 }}>
-          {[["in_stock", `In stock (${group.items.length})`], ["all", `All lots (${lotHist.length})`]].map(([key, label]) => (
+          {[["in_stock", `In stock (${group.items.filter(lotHasStock).length})`], ["all", `All lots (${lotHist.length})`]].map(([key, label]) => (
             <button
               key={key}
               role="tab"
@@ -2620,7 +2629,8 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
       )}
       {lotView === "in_stock" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
-        {group.items.map((it, idx) => {
+        {group.items.filter(lotHasStock).length === 0 && <div data-testid="no-lot-in-stock" style={{ fontSize: 13, color: THEME.textMuted }}>No lot has stock left — every lot is listed under All lots.</div>}
+        {group.items.filter(lotHasStock).map((it, idx) => {
           const dExp = it.expiry_date ? daysBetween(it.expiry_date, todayISO()) : null;
           const lotStatus = statusOf(it, warnDays);
           const lotTone = DASH_TONE[lotStatus] || DASH_TONE.green;
@@ -2628,7 +2638,7 @@ function DetailView({ group, logs, allReagents, allLogs, coverageDays, can, warn
           return (
             <div key={it.id} style={{ background: THEME.cardBg, border: `1px solid ${THEME.cardBorder}`, borderRadius: 8, padding: "12px 14px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                {idx === 0 && <span style={{ background: THEME.primary, color: THEME.cardBg, fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4, letterSpacing: 0.3 }}>USE FIRST</span>}
+                {idx === 0 && lotIsUsable(it, todayISO()) && <span style={{ background: THEME.primary, color: THEME.cardBg, fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4, letterSpacing: 0.3 }}>USE FIRST</span>}
                 <div style={{ flex: 1, minWidth: 90, fontFamily: MONO, fontSize: 13, color: THEME.text }}>Lot {it.lot_number}</div>
                 <div style={{ textAlign: "right", fontSize: 13, color: THEME.text, fontWeight: 600 }}>
                   {(() => {
