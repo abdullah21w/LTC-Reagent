@@ -138,7 +138,7 @@
       "Edit Lot · set a lot's missing device (PostgreSQL {v})": 8
     },
     "pg/receiptChoices.test.mjs": {
-      "Receipt choices: explicit device and expiry on new Lots (PostgreSQL {v})": 17
+      "Receipt choices: explicit device and expiry on new Lots (PostgreSQL {v})": 23
     }
   }
 }

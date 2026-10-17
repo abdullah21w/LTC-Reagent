@@ -1,7 +1,11 @@
 // MIGRATE_RECEIPT_CHOICES.sql on real PostgreSQL, in Production order (U2a, atomic
 // Log Use, atomic edit / undo, release control with an approved build), driven as
 // the app's anon role with its build header. Proven here:
-//   * applying it changes no existing row; VERIFY passes; it adds no INSERT trigger;
+//   * applying it changes no existing value (it only numbers the Lots in receipt_seq);
+//     VERIFY passes; it adds no INSERT trigger; the receipt_seq sequence is closed
+//     to the app even under Supabase's default privileges;
+//   * no bypass makes a new Lot "legacy": not created_at, not the id of an erased
+//     Lot, not receipt_seq (can't be set, changed or reset by the app);
 //   * Lots recorded before it (no choices) keep working everywhere: Log Use, edit /
 //     undo, Stock Count start / entry / resolve, discard, Edit Lot (device, expiry);
 //   * a NEW Lot can't be saved without both choices or with choices that contradict
@@ -17,7 +21,7 @@ import { seed } from "../fixtures/pgSeed.mjs";
 
 const M = await load({ contents: `export * as S from "${src("receiveSave.js")}"; export * as E from "${src("lotEdit.js")}";` });
 const { S, E } = M;
-const STRIP = (rows) => JSON.stringify(rows.map(({ device_choice, expiry_choice, ...r }) => r));
+const STRIP = (rows) => JSON.stringify(rows.map(({ device_choice, expiry_choice, receipt_seq, ...r }) => r));
 
 for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and expiry on new Lots (PostgreSQL ${version})`, async () => {
   const server = await startPostgres(version);
@@ -26,6 +30,7 @@ for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and e
     const c = await server.connect(db);
     await buildBaseSchema(c); await seed(c); await applyU2a(c);
     await c.query("grant select, insert, update, delete on all tables in schema public to anon");
+    await c.query("alter default privileges in schema public grant all on sequences to anon, authenticated"); // as Supabase
     await applyLogUse(c); await applyLogEdit(c); await applyRelease(c);
     await c.query("grant select, insert, update, delete on all tables in schema public to anon; revoke all on app_release_log, app_release_seen from anon; revoke insert, update, delete on app_release from anon");
     const B = randomBytes(20).toString("hex");
@@ -33,7 +38,12 @@ for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and e
     const app = await conn();
     await app.query("select ltc_hello()");
     await c.query("select ltc_release_open($1, 'choices test', p_deployment_verified => true)", [B]);
-    const add = async (lot, device, qty, exp) => (await c.query("insert into reagents (name, department, item_type, device, lot_number, unit, quantity_received, current_quantity, expiry_date, date_added, added_by, low_stock_threshold) values ('ERF', 'Chemistry', 'Reagent', $1, $2, 'box', $3, $3, $4, '2026-09-22', 'tester', 1) returning id", [device, lot, qty, exp])).rows[0].id;
+    // Lots added before the migration are legacy (no choice columns yet); after it, with explicit choices.
+    const add = async (lot, device, qty, exp) => {
+      const after = lot.startsWith("ER-");
+      const sql = `insert into reagents (name, department, item_type, device, lot_number, unit, quantity_received, current_quantity, expiry_date, date_added, added_by, low_stock_threshold${after ? ", device_choice, expiry_choice" : ""}) values ('ERF', 'Chemistry', 'Reagent', $1, $2, 'box', $3, $3, $4, '2026-09-22', 'tester', 1${after ? ", $5, $6" : ""}) returning id`;
+      return (await c.query(sql, after ? [device, lot, qty, exp, device ? "device" : "none", exp ? "date" : "none"] : [device, lot, qty, exp])).rows[0].id;
+    };
     const legacyBlank = await add("A3826", "", 10, null), legacyDev = await add("L3470", "VITROS", 10, "2027-09-08");
     const before = STRIP((await c.query("select * from reagents order by id")).rows);
 
@@ -41,8 +51,12 @@ for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and e
     await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql"));
     const v = (await c.query(readRoot("VERIFY_RECEIPT_CHOICES.sql"))).rows;
     const def0 = (await c.query("select pg_get_constraintdef(oid) d from pg_constraint where conname = 'reagents_receipt_choices'")).rows[0].d;
-    check("VERIFY: checks 1–6 and OVERALL PASS; every existing Lot is legacy (no choices); no existing row changed", [v.filter((r) => r.ord <= 99).map((r) => r.result), v.find((r) => r.ord == 100).result.startsWith(`${(await c.query("select count(*) from reagents")).rows[0].count} / 0`), STRIP((await c.query("select * from reagents order by id")).rows) === before],
-      [Array(7).fill("PASS"), true, true]);
+    const nLots = Number((await c.query("select count(*) from reagents")).rows[0].count);
+    check("VERIFY: checks 1–8 and OVERALL PASS; every existing Lot is legacy; cut-off = the last number given; pg_graphql reported (not installed here)", [v.filter((r) => r.ord <= 99).map((r) => r.result), v.find((r) => r.ord == 100).result, v.find((r) => r.ord == 101).result, v.find((r) => r.ord == 102).result],
+      [Array(9).fill("PASS"), `${nLots} / 0`, `${nLots} / ${nLots}`, "no"]);
+    check("no existing value changed — quantities, logs' Lots, devices, dates (only the new receipt_seq numbering was added)", [STRIP((await c.query("select * from reagents order by id")).rows) === before, Number((await c.query("select count(distinct receipt_seq) from reagents")).rows[0].count)], [true, nLots]);
+    const seqName = (await c.query("select pg_get_serial_sequence('public.reagents', 'receipt_seq') n")).rows[0].n;
+    check("the receipt_seq sequence is closed to PUBLIC / anon / authenticated (Supabase's default grant removed)", (await c.query("select has_sequence_privilege('anon', $1, 'usage') au, has_sequence_privilege('anon', $1, 'update') aup, has_sequence_privilege('authenticated', $1, 'update') uu, (select count(*)::int from pg_class c, aclexplode(c.relacl) a where c.oid = $1::regclass and a.grantee = 0) pub", [seqName])).rows[0], { au: false, aup: false, uu: false, pub: 0 });
     check("no INSERT trigger on reagents (row level) — the rule is a check constraint", (await c.query("select count(*)::int n from pg_trigger where tgrelid = 'reagents'::regclass and not tgisinternal and (tgtype & 4) <> 0 and (tgtype & 1) = 1")).rows[0].n, 0);
 
     // ── legacy Lots keep working everywhere ──
@@ -75,6 +89,26 @@ for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and e
       await ins({ cols: ", device_choice", vals: ", 'none'" }), await ins({ cols: ", device_choice, expiry_choice", vals: ", 'maybe', 'none'" })], Array(6).fill("refused"));
     check("explicit, consistent choices are accepted (device + date, none + none)", [await ins({ device: "VITROS", exp: "2027-01-01", cols: ", device_choice, expiry_choice", vals: ", 'device', 'date'" }), await ins({ cols: ", device_choice, expiry_choice", vals: ", 'none', 'none'" })], ["ok", "ok"]);
 
+    // ── bypass attempts with the app's own role (anon) ──
+    const cols = "name, department, item_type, device, lot_number, unit, quantity_received, current_quantity, date_added, added_by, low_stock_threshold";
+    const why = (e) => (/reagents_receipt_choices/.test(e.message) ? "refused(rule)" : /permission denied/.test(e.message) ? "denied(privilege)" : /non-DEFAULT|only be updated to DEFAULT/.test(e.message) ? "denied(identity)" : /duplicate key/.test(e.message) ? "denied(primary key)" : e.message.slice(0, 60));
+    const by = (sql, p) => app.query(sql, p).then(() => "ACCEPTED", why);
+    const lot = () => "B-" + randomBytes(3).toString("hex");
+    check("no way to make a NEW Lot legacy: created_at in the past, a receipt_seq of its own, setval / nextval on the sequence", [
+      await by(`insert into reagents (${cols}, created_at) values ('X','Chemistry','Reagent','','${lot()}','box',1,1,'2026-10-17','x',0,'2020-01-01')`),
+      await by(`insert into reagents (${cols}, receipt_seq) values ('X','Chemistry','Reagent','','${lot()}','box',1,1,'2026-10-17','x',0,1)`),
+      await by("select setval($1, 1)", [seqName]), await by("select nextval($1)", [seqName])],
+      ["refused(rule)", "denied(identity)", "denied(privilege)", "denied(privilege)"]);
+    const someNew = (await c.query("select id from reagents where device_choice is not null limit 1")).rows[0].id;
+    check("…nor by updating one: receipt_seq can't be set; created_at in the past + clearing the choices is refused", [
+      await by("update reagents set receipt_seq = 1 where id = $1", [someNew]),
+      await by("update reagents set created_at = '2020-01-01', device_choice = null, expiry_choice = null where id = $1", [someNew])], ["denied(identity)", "refused(rule)"]);
+    check("…and a legacy Lot can't be renumbered out of range and stay without choices (receipt_seq = DEFAULT refused by the rule)", await by("update reagents set receipt_seq = default where id = $1", [legacyBlank]), "refused(rule)");
+    const erased = await add("ER-1", "", 1, null);
+    const erasedSeq = Number((await c.query("select receipt_seq from reagents where id = $1", [erased])).rows[0].receipt_seq);
+    await c.query("delete from reagents where id = $1", [erased]); // the owner's "erase permanently" frees its id
+    check("an erased Lot's id reused for a new Lot without choices: refused (the new row gets a new number, past the cut-off)", [erasedSeq > nLots, await by(`insert into reagents (id, ${cols}) values ($1,'X','Chemistry','Reagent','','${lot()}','box',1,1,'2026-10-17','x',0)`, [erased])], [true, "refused(rule)"]);
+
     // ── Receive's save path ──
     const entry = (o = {}) => ({ receiptId: randomUUID(), name: "ERF", department: "Chemistry", itemType: "Reagent", device: "", deviceChoice: "none", lotNumber: "R-" + randomBytes(3).toString("hex"), unit: "box", quantityReceived: 2, expiryDate: "2028-03-09", expiryChoice: "date", receivedDate: "2026-10-17", receivedBy: "tester", lowStockThreshold: 1, intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: true, receivingNotes: "", inspectionNotes: "", ...o });
     const e1 = entry();
@@ -106,14 +140,16 @@ for (const version of PG_VERSIONS) suite(`Receipt choices: explicit device and e
 
     // ── re-run, rollback, re-apply ──
     await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql"));
-    check("re-running the migration never moves the cut-off (constraint unchanged)", (await c.query("select pg_get_constraintdef(oid) d from pg_constraint where conname = 'reagents_receipt_choices'")).rows[0].d, def0);
+    const nums0 = JSON.stringify((await c.query("select id, receipt_seq from reagents order by id")).rows);
+    await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql"));
+    check("re-running the migration never moves the cut-off or renumbers a Lot (constraint and numbers unchanged)", [(await c.query("select pg_get_constraintdef(oid) d from pg_constraint where conname = 'reagents_receipt_choices'")).rows[0].d === def0, JSON.stringify((await c.query("select id, receipt_seq from reagents order by id")).rows) === nums0], [true, true]);
     const keep = JSON.stringify((await c.query("select id, device_choice, expiry_choice from reagents order by id")).rows);
     await c.query(readRoot("ROLLBACK_RECEIPT_CHOICES.sql"));
-    check("rollback: the rule is gone, the recorded choices are kept, and a receipt without choices is accepted again", [(await c.query("select count(*)::int n from pg_constraint where conname = 'reagents_receipt_choices'")).rows[0].n, JSON.stringify((await c.query("select id, device_choice, expiry_choice from reagents order by id")).rows) === keep, await ins({})], [0, true, "ok"]);
+    check("rollback: the rule is gone, the recorded choices and receipt_seq are kept, and a receipt without choices is accepted again", [(await c.query("select count(*)::int n from pg_constraint where conname = 'reagents_receipt_choices'")).rows[0].n, JSON.stringify((await c.query("select id, device_choice, expiry_choice from reagents order by id")).rows) === keep, await ins({})], [0, true, "ok"]);
     await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql"));
     check("re-applying after a rollback: VERIFY all PASS (Lots received meanwhile without choices count as legacy)", (await c.query(readRoot("VERIFY_RECEIPT_CHOICES.sql"))).rows.filter((r) => r.ord <= 99).every((r) => r.result === "PASS"), true);
     await app.end(); await c.end();
   } finally {
     await server.stop();
   }
-}, { expectedChecks: 17 });
+}, { expectedChecks: 23 });
