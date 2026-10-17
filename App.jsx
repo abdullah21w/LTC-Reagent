@@ -809,7 +809,7 @@ export default function App() {
 
       {showWizard && <ReceiveWizard presets={presets} devices={devices} role={role} username={username} departments={config.departments || []} defaultLowStock={config.low_stock_default_percent} onClose={() => setShowWizard(false)} onSubmit={addReagent} lookupLots={lookupLotsByNumber} />}
       {showLog && <LogConsumptionModal reagents={reagents.filter((r) => !r.deleted)} presets={presets} username={username} lotToLotPending={lotToLotPending} onClose={() => setShowLog(false)} onSubmit={recordConsumption} />}
-      {editReagent && <EditReagentModal reagent={editReagent} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
+      {editReagent && <EditReagentModal reagent={editReagent} devices={devices} onClose={() => setEditReagent(null)} onSave={saveEditedReagent} />}
       {discardReagentTarget && <DiscardModal reagent={discardReagentTarget} onClose={() => setDiscardReagentTarget(null)} onDiscard={discardReagent} />}
       {editLog && <EditLogModal log={editLog} lot={reagents.find((r) => r.id === editLog.reagent_id)} onClose={() => setEditLog(null)} onSave={saveEditedLog} />}
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} onSave={changeOwnPassword} />}
@@ -3500,7 +3500,7 @@ function LogConsumptionModal({ reagents, presets, username, lotToLotPending, onC
   );
 }
 
-function EditReagentModal({ reagent, onClose, onSave }) {
+function EditReagentModal({ reagent, devices, onClose, onSave }) {
   const [form, setForm] = useState({ ...reagent });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const wasPackaged = reagent.units_per_carton !== null && reagent.units_per_carton !== undefined;
@@ -3532,7 +3532,10 @@ function EditReagentModal({ reagent, onClose, onSave }) {
   const hist = hasHistory(history);
   const locked = !history.loaded || hist !== false;
 
-  const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, packUnit, history, confirmed });
+  const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, packUnit, history, confirmed, devices });
+  // Device: only a lot recorded without one can be given one, from its department's list.
+  const hasDevice = String(reagent.device ?? "").trim() !== "";
+  const deptDevices = (devices || []).filter((d) => d.department === reagent.department).map((d) => d.name).sort((a, b) => a.localeCompare(b));
   const unit = (form.unit || "").trim() || "units";
   const perBox = packagingEnabled ? Number(unitsPerCarton) : null;
   const packName = packagingEnabled && packUnit.trim() !== "" ? packUnit.trim() : null;
@@ -3619,6 +3622,19 @@ function EditReagentModal({ reagent, onClose, onSave }) {
         )}
 
         <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
+        {hasDevice ? (
+          <div style={labelStyle} data-testid="lot-device">Device<div style={{ ...inputStyle, background: "#F1F4F3", color: "#6B7B79" }}>{reagent.device}</div>
+            <div style={{ fontSize: 11.5, color: "#7B8E8A", marginTop: 4, fontWeight: 400 }}>A lot's device can't be changed here.</div>
+          </div>
+        ) : (
+          <label style={labelStyle}>Device (this lot was recorded without one)
+            <select style={inputStyle} value={form.device || ""} onChange={set("device")} disabled={reagent.active_on_device || deptDevices.length === 0} data-testid="lot-device-select">
+              <option value="">No device — leave as it is</option>
+              {deptDevices.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <div style={{ fontSize: 11.5, color: "#7B8E8A", marginTop: 4, fontWeight: 400 }}>{deptDevices.length === 0 ? `The ${reagent.department || "lot's"} department has no devices in Settings.` : "Choose the device this lot is used on. Its quantity and history stay as they are."}</div>
+          </label>
+        )}
         <label style={labelStyle}>Low stock alert below ({unit})<input type="number" style={inputStyle} value={form.low_stock_threshold} onChange={set("low_stock_threshold")} /></label>
 
         {plan.status === "invalid" && (

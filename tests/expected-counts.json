@@ -33,6 +33,9 @@
     },
     "unit/sourceIntegrity.test.mjs": {
       "Source integrity · no undefined names (purgeReagent regression)": 6
+    },
+    "unit/lotDevice.test.mjs": {
+      "Edit Lot · set the device of a lot recorded without one": 16
     }
   },
   "ui": {
@@ -62,6 +65,9 @@
     },
     "ui/releaseGate.test.mjs": {
       "Release control · maintenance screen and forced update": 13
+    },
+    "ui/editLotDevice.test.mjs": {
+      "Edit Lot window · device of a lot recorded without one": 6
     }
   },
   "pg": {
@@ -121,6 +127,9 @@
     },
     "pg/releaseControl.test.mjs": {
       "Release control: maintenance + forced update (PostgreSQL {v})": 40
+    },
+    "pg/lotDevice.test.mjs": {
+      "Edit Lot · set a lot's missing device (PostgreSQL {v})": 8
     }
   }
 }

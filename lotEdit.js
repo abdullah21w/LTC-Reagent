@@ -75,8 +75,24 @@ export function hasHistory(history) {
 //     errors, blocks, confirmations, payload }
 // payload is set only when status is "ok"; its quantities are exactly the
 // numbers typed (never converted).
-export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, packUnit, history, confirmed = false }) {
+export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, packUnit, history, confirmed = false, devices = [] }) {
   const errors = [];
+  // Device: a lot recorded WITHOUT a device can be given one from its own
+  // department's device list. A device already set is never changed here (moving
+  // a lot between devices is a separate, not yet approved, feature), and a lot
+  // marked active on a device is never touched.
+  const oldDevice = String(original.device ?? "");
+  const newDevice = form.device === undefined || form.device === null ? oldDevice : String(form.device);
+  const deviceChanged = newDevice !== oldDevice;
+  if (deviceChanged && oldDevice.trim() !== "") {
+    errors.push(`This lot is already on ${oldDevice}. Moving a lot to another device isn't available here.`);
+  } else if (deviceChanged && newDevice.trim() === "") {
+    errors.push("Choose a device from the list, or leave the lot without a device.");
+  } else if (deviceChanged && original.active_on_device) {
+    errors.push("This lot is marked active on a device, so its device can't be set here.");
+  } else if (deviceChanged && !(devices || []).some((d) => d.name === newDevice && d.department === original.department)) {
+    errors.push(`"${newDevice}" isn't a device of the ${original.department || "lot's"} department. Choose one from the list.`);
+  }
   const qr = num(form.quantity_received), cq = num(form.current_quantity), low = num(form.low_stock_threshold);
   if (!Number.isFinite(qr) || qr < 0) errors.push("Quantity received must be a number of 0 or more.");
   if (!Number.isFinite(cq) || cq < 0) errors.push("Current quantity must be a number of 0 or more.");
@@ -173,13 +189,14 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, pac
     low_stock_threshold: low,
     units_per_carton: packagingEnabled ? newPer : null,
     pack_unit: newPack,
+    ...(deviceChanged ? { device: newDevice } : {}),
   };
   return { status: "ok", errors: [], blocks: [], confirmations, payload };
 }
 
 // ─── Saving (U2c-1) ─────────────────────────────────────────────────────────
 // The Edit Lot fields. Only the ones the user actually changed are written.
-export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit"];
+export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit", "device"];
 const NUMERIC_FIELDS = new Set(["quantity_received", "current_quantity", "low_stock_threshold", "units_per_carton"]);
 
 // Comparable value: null for missing (and for a blank expiry date), a number
@@ -247,6 +264,11 @@ export function describeSaveError(e) {
 export async function saveLotEdit({ client, original, payload, username, now, logActivity }) {
   const { changes, expected, changed } = buildLotUpdate(original, payload);
   if (changed.length === 0) return { ok: true, unchanged: true, changed };
+  // Device: only "no device" → a device (planLotEdit checks the list); the update
+  // is conditional on the device still being blank, so two people can't both set it.
+  if ("device" in changes && (expected.device !== "" || changes.device === null || String(changes.device).trim() === "")) {
+    return { ok: false, changed, message: "Only a lot without a device can be given one here, so nothing was saved." };
+  }
   let q = client.from("reagents").update({ ...changes, edited_by: username, edited_at: now || new Date().toISOString() }).eq("id", original.id);
   for (const [f, v] of Object.entries(expected)) q = v === null ? q.is(f, null) : q.eq(f, v);
   let res;
@@ -265,7 +287,8 @@ export async function saveLotEdit({ client, original, payload, username, now, lo
   if (!logActivity) return { ok: true, changed, auditLogged: null };
   let auditLogged = false;
   try {
-    const a = await logActivity("edit", "reagent", `${payload.name || original.name || ""} — Lot ${payload.lot_number ?? original.lot_number}`.trim());
+    const deviceNote = "device" in changes ? `: device set to ${changes.device} (was none)` : "";
+    const a = await logActivity("edit", "reagent", `${payload.name || original.name || ""} — Lot ${payload.lot_number ?? original.lot_number}${deviceNote}`.trim());
     auditLogged = !(a && a.error);
   } catch { auditLogged = false; }
   if (!auditLogged) return { ok: true, changed, auditLogged: false, warning: "The change was saved, but it could not be recorded in the activity log. Please tell the owner so the edit can be noted manually." };
