@@ -150,3 +150,48 @@ export function findPossibleDuplicates(rows, { lotNumber, department, device, un
     })
     .sort((a, b) => Number(b.sameIdentity) - Number(a.sameIdentity));
 }
+
+// ─── Device and expiry: an explicit decision for each (MIGRATE_RECEIPT_CHOICES.sql) ───
+// Receive has no default for either. Staff choose:
+//   device  "device" + a device of the Lot's department, or "none" (No device recorded)
+//   expiry  "date"   + the expiry date,                  or "none" (No expiry date)
+// The choices are stored (device_choice / expiry_choice), so a deliberate "none"
+// is never confused with a field left empty on a Lot recorded before this rule.
+export const DEVICE_CHOICES = ["device", "none"];
+export const EXPIRY_CHOICES = ["date", "none"];
+export const CHOICE_LABEL = { none_device: "No device recorded", none_expiry: "No expiry date" };
+export const isIsoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`))
+  && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+
+/**
+ * form: { deviceChoice, device, expiryChoice, expiryDate, department }; devices: [{ name, department }]
+ * → { status: "ok" | "invalid", errors, value: { device, device_choice, expiry_date, expiry_choice } | null }
+ */
+export function planChoices({ deviceChoice, device, expiryChoice, expiryDate, department }, devices = []) {
+  const errors = [];
+  const listed = (devices || []).filter((d) => d.department === department).map((d) => d.name);
+  let dev = "";
+  if (!DEVICE_CHOICES.includes(deviceChoice)) errors.push(`Device: choose a device from the list, or "${CHOICE_LABEL.none_device}".`);
+  else if (deviceChoice === "device") {
+    if (listed.length === 0) errors.push(`The ${department || "selected"} department has no devices in Settings — choose "${CHOICE_LABEL.none_device}".`);
+    else if (!listed.includes(device)) errors.push(`Device: choose which device (from the ${department} list).`);
+    else dev = device;
+  }
+  let exp = null;
+  if (!EXPIRY_CHOICES.includes(expiryChoice)) errors.push(`Expiry: enter the expiry date, or choose "${CHOICE_LABEL.none_expiry}".`);
+  else if (expiryChoice === "date") {
+    if (!isIsoDate(expiryDate)) errors.push("Expiry: enter the expiry date.");
+    else exp = expiryDate;
+  }
+  if (errors.length) return { status: "invalid", errors, value: null };
+  return { status: "ok", errors: [], value: { device: dev, device_choice: deviceChoice, expiry_date: exp, expiry_choice: expiryChoice } };
+}
+
+/** The same rule the database enforces, on a row about to be saved: null when consistent, else why not. */
+export function receiptChoicesProblem(row) {
+  if (!DEVICE_CHOICES.includes(row?.device_choice) || !EXPIRY_CHOICES.includes(row?.expiry_choice)) return "missing_choice";
+  if ((row.device_choice === "device") !== (String(row.device ?? "").trim() !== "")) return "device_mismatch";
+  if ((row.expiry_choice === "date") !== (row.expiry_date !== null && row.expiry_date !== undefined && row.expiry_date !== "")) return "expiry_mismatch";
+  if (row.expiry_choice === "date" && !isIsoDate(row.expiry_date)) return "expiry_mismatch";
+  return null;
+}

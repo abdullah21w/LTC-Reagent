@@ -3535,6 +3535,8 @@ function EditReagentModal({ reagent, devices, onClose, onSave }) {
   const plan = planLotEdit({ original: reagent, form, packagingEnabled, unitsPerBox: unitsPerCarton, packUnit, history, confirmed, devices });
   // Device: only a lot recorded without one can be given one, from its department's list.
   const hasDevice = String(reagent.device ?? "").trim() !== "";
+  // Lots received with the explicit expiry choice keep it: a date, or "No expiry date".
+  const explicitExpiry = reagent.expiry_choice === "date" || reagent.expiry_choice === "none";
   const deptDevices = (devices || []).filter((d) => d.department === reagent.department).map((d) => d.name).sort((a, b) => a.localeCompare(b));
   const unit = (form.unit || "").trim() || "units";
   const perBox = packagingEnabled ? Number(unitsPerCarton) : null;
@@ -3621,7 +3623,17 @@ function EditReagentModal({ reagent, devices, onClose, onSave }) {
           </>
         )}
 
-        <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
+        {explicitExpiry ? (
+          <div style={labelStyle}>Expiry date
+            <div role="group" aria-label="Expiry" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              <button type="button" aria-pressed={form.expiry_choice === "date"} style={chip(form.expiry_choice === "date")} onClick={() => setForm((f) => ({ ...f, expiry_choice: "date", expiry_date: f.expiry_date || "" }))}>Expiry date</button>
+              <button type="button" aria-pressed={form.expiry_choice === "none"} style={chip(form.expiry_choice === "none")} onClick={() => setForm((f) => ({ ...f, expiry_choice: "none", expiry_date: "" }))}>No expiry date</button>
+            </div>
+            {form.expiry_choice === "date" && <input type="date" aria-label="Expiry date" data-testid="lot-expiry" style={{ ...inputStyle, marginTop: 6 }} value={form.expiry_date || ""} onChange={set("expiry_date")} />}
+          </div>
+        ) : (
+          <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiry_date || ""} onChange={set("expiry_date")} /></label>
+        )}
         {hasDevice ? (
           <div style={labelStyle} data-testid="lot-device">Device<div style={{ ...inputStyle, background: "#F1F4F3", color: "#6B7B79" }}>{reagent.device}</div>
             <div style={{ fontSize: 11.5, color: "#7B8E8A", marginTop: 4, fontWeight: 400 }}>A lot's device can't be changed here.</div>

@@ -36,6 +36,9 @@
     },
     "unit/lotDevice.test.mjs": {
       "Edit Lot · set the device of a lot recorded without one": 16
+    },
+    "unit/receiveChoices.test.mjs": {
+      "Receive · explicit device and expiry choice": 20
     }
   },
   "ui": {
@@ -68,6 +71,9 @@
     },
     "ui/editLotDevice.test.mjs": {
       "Edit Lot window · device of a lot recorded without one": 6
+    },
+    "ui/receiveChoices.test.mjs": {
+      "Receive window · explicit device and expiry choice": 12
     }
   },
   "pg": {
@@ -130,6 +136,9 @@
     },
     "pg/lotDevice.test.mjs": {
       "Edit Lot · set a lot's missing device (PostgreSQL {v})": 8
+    },
+    "pg/receiptChoices.test.mjs": {
+      "Receipt choices: explicit device and expiry on new Lots (PostgreSQL {v})": 17
     }
   }
 }

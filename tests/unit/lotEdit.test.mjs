@@ -92,7 +92,7 @@ check("null ↔ value both detected; blank expiry = null", [E.buildLotUpdate(lot
 check("packaging off: units_per_carton 6 → null, condition 6", E.buildLotUpdate(lot, payloadOf({ units_per_carton: null })), { changes: { units_per_carton: null }, expected: { units_per_carton: 6 }, changed: ["units_per_carton"] });
 check("text compared exactly (a deliberate unit retype is an edit)", E.buildLotUpdate(lot, payloadOf({ unit: "bottle" })).changes, { unit: "bottle" });
 check("fields outside Edit Lot (name, deleted …) are never written", E.buildLotUpdate(lot, payloadOf({ name: "X", deleted: true, current_quantity: 8 })).changed, ["current_quantity"]);
-check("EDITABLE_FIELDS", E.EDITABLE_FIELDS, ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit", "device"]);
+check("EDITABLE_FIELDS", E.EDITABLE_FIELDS, ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit", "device", "device_choice", "expiry_choice"]);
 
 check("conflict message", /changed elsewhere since you opened it.*Nothing was saved/.test(E.describeSaveError({ kind: "conflict" })), true);
 check("missing lot message", E.describeSaveError({ kind: "missing" }), "This lot no longer exists, so nothing was saved.");

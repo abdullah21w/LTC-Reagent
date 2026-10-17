@@ -18,6 +18,8 @@ const open = async () => { calls.length = 0; await U.mount(A.createElement(A.Rec
 const fill = async ({ packaging = false } = {}) => {
   await U.type(U.inputByLabel("Item (type to search)"), "Reagent R");
   await U.type(U.inputByLabel("Lot number"), "TR-001");
+  // Device and expiry: an explicit choice each (no default)
+  await U.click(btn("No device recorded")); await U.click(btn("No expiry date"));
   // U2d-2: the base unit is chosen explicitly (no default); packaging uses its own controls
   await U.click(btn("bottle"));
   if (packaging) {

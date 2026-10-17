@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 const S = await load("receiveSave.js");      // session of device 1
 const S2 = await load("receiveSave.js");     // a separate module instance = another device's session
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const entry = (over = {}) => ({ receiptId: randomUUID(), name: "Reagent R", department: "Chemistry", itemType: "Reagent", device: "Analyzer 1", lotNumber: "TR-001", unit: "bottle", quantityReceived: 12, expiryDate: "2027-06-30", receivedDate: "2026-10-13", receivedBy: "tester", lowStockThreshold: 2, unitsPerCarton: 6, intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: true, receivingNotes: "", inspectionNotes: "", ...over });
+const entry = (over = {}) => ({ receiptId: randomUUID(), name: "Reagent R", department: "Chemistry", itemType: "Reagent", device: "Analyzer 1", deviceChoice: "device", expiryChoice: "date", lotNumber: "TR-001", unit: "bottle", quantityReceived: 12, expiryDate: "2027-06-30", receivedDate: "2026-10-13", receivedBy: "tester", lowStockThreshold: 2, unitsPerCarton: 6, intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: true, receivingNotes: "", inspectionNotes: "", ...over });
 // A client whose network fails at a chosen moment (the database itself is real).
 function flaky(base, mode, pending = []) {
   return { from(t) {
@@ -47,6 +47,7 @@ for (const version of PG_VERSIONS) suite(`U2d-1 · Receive save path (PostgreSQL
     const db = await server.createDatabase();
     const c = await server.connect(db);
     await buildBaseSchema(c); await seed(c); await applyU2a(c);
+    await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql")); // Receive now stores the device / expiry choices
     await c.query("grant select, insert, update, delete on all tables in schema public to anon");
     check("database is in the post-Gate-A3 state", (await c.query(readRoot("VERIFY_PACKAGING.sql"))).rows.find((r) => r.ord == 99).result, "PASS");
 

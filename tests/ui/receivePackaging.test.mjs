@@ -22,7 +22,7 @@ let lookupResult = { data: [], error: null };
 const onSubmit = async (e) => { calls.push(e); return { ok: true, outcome: "saved" }; };
 const lookupLots = async (lot) => { lookups.push(lot); return typeof lookupResult === "function" ? lookupResult() : lookupResult; };
 const open = async (props = {}) => { calls.length = 0; lookups.length = 0; await U.mount(A.createElement(A.ReceiveWizard, { presets: [{ id: "p1", name: "Diluent D", department: "Chemistry", unit: "mL" }], devices: [], role: "staff", username: "tester", departments: ["Chemistry", "Hematology"], defaultLowStock: 5, onClose() {}, onSubmit, lookupLots, ...props })); };
-const basics = async () => { await U.type(U.inputByLabel("Item (type to search)"), "Reagent R"); await U.type(U.inputByLabel("Lot number"), "TR-001"); };
+const basics = async () => { await U.type(U.inputByLabel("Item (type to search)"), "Reagent R"); await U.type(U.inputByLabel("Lot number"), "TR-001"); await U.click(gbtn("Device", "No device recorded")); await U.click(gbtn("Expiry", "No expiry date")); };
 const finishStep2 = async () => { await U.click(nextBtn()); await U.settle(); };
 
 // 1. Base unit is required — no default
@@ -117,11 +117,11 @@ await U.unmount();
 await open(); await basics(); await U.click(btn("piece"));
 await U.click(btn("Packaged (box, carton, kit …)")); await U.click(btn("Kit"));
 await U.type(U.inputByLabel("Pieces per kit"), "4"); await U.type(U.inputByLabel("Kits received"), "2"); await U.type(U.inputByLabel("Loose pieces (optional)"), "1");
-await U.type(U.inputByLabel("Expiry date"), "2027-06-30");
+await U.click(gbtn("Expiry", "Enter the expiry date")); await U.type(U.host.querySelector('[data-testid="receive-expiry"]'), "2027-06-30");
 check("threshold label in the base unit; blank shows the default", [!!U.inputByLabel("Low stock alert below (pieces)"), /Leave blank for the default \(5\); 0 is kept as 0/.test(U.text())], [true, true]);
 await finishStep2();
 const today = new Date().toISOString().slice(0, 10);
-check("review shows exactly what will be saved (blank threshold = default)", review(), { "Item": "Reagent R", "Lot number": "TR-001", "Department": "Chemistry", "Device": "—", "Base unit": "piece", "Packaging": "1 kit = 4 pieces", "Received": "2 kits + 1 loose piece", "Total stored": "9 pieces", "Expiry": "2027-06-30", "Received on": today, "Low stock alert below": "5 pieces (default)" });
+check("review shows exactly what will be saved (blank threshold = default)", review(), { "Item": "Reagent R", "Lot number": "TR-001", "Department": "Chemistry", "Device": "No device recorded", "Base unit": "piece", "Packaging": "1 kit = 4 pieces", "Received": "2 kits + 1 loose piece", "Total stored": "9 pieces", "Expiry": "2027-06-30", "Received on": today, "Low stock alert below": "5 pieces (default)" });
 await U.click(btn("Back"));
 await U.type(U.inputByLabel("Low stock alert below (pieces)"), "0");
 await finishStep2();

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { X, ScanLine, Check } from "lucide-react";
 import BarcodeScanner from "./BarcodeScanner";
 import { newReceiptId } from "./receiveSave";
-import { planReceipt, describeReceipt, findPossibleDuplicates, SUGGESTED_BASE_UNITS } from "./receivePlan";
+import { planReceipt, describeReceipt, findPossibleDuplicates, SUGGESTED_BASE_UNITS, planChoices, CHOICE_LABEL } from "./receivePlan";
 import { SUGGESTED_PACK_UNITS, normalizeUnit, unitLabel } from "./units";
 
 const INSPECTION_ITEMS = [
@@ -29,6 +29,8 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
 
   const [form, setForm] = useState({
     name: "", department: departments[0] || "", unit: "", itemType: "Reagent", device: "",
+    // Device and expiry: an explicit decision each, no default (MIGRATE_RECEIPT_CHOICES.sql).
+    deviceChoice: "", expiryChoice: "",
     lotNumber: "", quantityReceived: "", expiryDate: "",
     receivedBy: username || "", receivedDate: new Date().toISOString().slice(0, 10),
     lowStockThreshold: "",
@@ -71,10 +73,11 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
   // One plan drives the checks, the live total, the review and the saved values.
   const plan = planReceipt({ unit: form.unit, packaged, packUnit, unitsPerPackage, packages, loose, quantity: form.quantityReceived, lowStock: form.lowStockThreshold }, defaultLowStock);
   const v = plan.value;
+  const choices = planChoices(form, devices);
   const baseUnit = String(form.unit || "").trim();
   const unitWord = (n) => unitLabel(baseUnit || "unit", n);
   const packWord = (n) => unitLabel(String(packUnit || "").trim() || "package", n);
-  const step1Valid = !!(form.name.trim() && form.lotNumber.trim() && form.receivedBy && form.receivedDate && plan.status === "ok");
+  const step1Valid = !!(form.name.trim() && form.lotNumber.trim() && form.receivedBy && form.receivedDate && plan.status === "ok" && choices.status === "ok");
 
   async function runDuplicateCheck() {
     const lot = form.lotNumber.trim();
@@ -123,7 +126,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
     else onClose();
   }
   async function finish() {
-    if (inFlight.current || submitting || plan.status !== "ok") return;
+    if (inFlight.current || submitting || plan.status !== "ok" || choices.status !== "ok") return;
     inFlight.current = true;
     setSubmitting(true);
     setSaveError(null);
@@ -132,6 +135,10 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
       result = await onSubmit({
         ...form,
         receiptId,
+        device: choices.value.device,
+        deviceChoice: choices.value.device_choice,
+        expiryDate: choices.value.expiry_date,
+        expiryChoice: choices.value.expiry_choice,
         unit: v.unit,
         quantityReceived: v.total,
         unitsPerCarton: v.packaged ? v.perPackage : null,
@@ -196,25 +203,18 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
                 {departments.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
             </label>
-            <label style={labelStyle}>Device / analyzer (optional, type to search)
-              <div style={{ position: "relative" }}>
-                <input style={inputStyle} value={form.device} onChange={set("device")} placeholder="e.g. Cobas c311" autoComplete="off" />
-                {form.device.trim() && !devicesForDept.some((d) => d.name === form.device) && devicesForDept.filter((d) => d.name.toLowerCase().includes(form.device.trim().toLowerCase())).length > 0 && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #C7D1CE", borderRadius: 8, marginTop: 4, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 20px rgba(0,0,0,0.12)" }}>
-                    {devicesForDept.filter((d) => d.name.toLowerCase().includes(form.device.trim().toLowerCase())).slice(0, 8).map((d) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => setForm((f) => ({ ...f, device: d.name }))}
-                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #EEF2F0", padding: "10px 12px", fontSize: 14 }}
-                      >
-                        {d.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            <div style={labelStyle}>Device — required choice
+              <div role="group" aria-label="Device" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                <button type="button" aria-pressed={form.deviceChoice === "device"} style={chip(form.deviceChoice === "device")} onClick={() => setForm((f) => ({ ...f, deviceChoice: "device" }))}>Select a device</button>
+                <button type="button" aria-pressed={form.deviceChoice === "none"} style={chip(form.deviceChoice === "none")} onClick={() => setForm((f) => ({ ...f, deviceChoice: "none", device: "" }))}>{CHOICE_LABEL.none_device}</button>
               </div>
-            </label>
+              {form.deviceChoice === "device" && (
+                <select aria-label="Which device" data-testid="receive-device" style={{ ...inputStyle, marginTop: 6 }} value={form.device} onChange={set("device")} disabled={devicesForDept.length === 0}>
+                  <option value="">{devicesForDept.length === 0 ? "No devices in this department" : "Choose the device…"}</option>
+                  {devicesForDept.map((d) => <option key={d.id || d.name} value={d.name}>{d.name}</option>)}
+                </select>
+              )}
+            </div>
             <label style={labelStyle}>Type
               <select style={inputStyle} value={form.itemType} onChange={set("itemType")}>
                 <option value="Reagent">Reagent</option>
@@ -233,7 +233,13 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
                 <ScanLine size={16} />
               </button>
             </div>
-            <label style={labelStyle}>Expiry date (leave blank if not applicable)<input type="date" style={inputStyle} value={form.expiryDate} onChange={set("expiryDate")} /></label>
+            <div style={labelStyle}>Expiry date — required choice
+              <div role="group" aria-label="Expiry" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                <button type="button" aria-pressed={form.expiryChoice === "date"} style={chip(form.expiryChoice === "date")} onClick={() => setForm((f) => ({ ...f, expiryChoice: "date" }))}>Enter the expiry date</button>
+                <button type="button" aria-pressed={form.expiryChoice === "none"} style={chip(form.expiryChoice === "none")} onClick={() => setForm((f) => ({ ...f, expiryChoice: "none", expiryDate: "" }))}>{CHOICE_LABEL.none_expiry}</button>
+              </div>
+              {form.expiryChoice === "date" && <input type="date" aria-label="Expiry date" data-testid="receive-expiry" style={{ ...inputStyle, marginTop: 6 }} value={form.expiryDate} onChange={set("expiryDate")} />}
+            </div>
 
             <div style={labelStyle}>Base unit — the unit you count and use (stock is stored in it)
               <div role="group" aria-label="Base unit" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
@@ -276,6 +282,9 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
               <label style={labelStyle}>Quantity received ({unitWord(2)})<input type="number" inputMode="decimal" style={inputStyle} value={form.quantityReceived} onChange={set("quantityReceived")} /></label>
             )}
             {v && <div data-testid="receipt-total" style={{ fontSize: 12.5, fontWeight: 600, color: "#0F7173" }}>Total to store: {describeReceipt(v)}</div>}
+            {choices.status === "invalid" && (
+              <div data-testid="choice-errors" style={{ fontSize: 12, color: "#A33A26" }}>{choices.errors.map((e) => <div key={e}>{e}</div>)}</div>
+            )}
             {plan.status === "invalid" && (
               <div data-testid="receipt-errors" style={{ fontSize: 12, color: "#A33A26" }}>{plan.errors.map((e) => <div key={e}>{e}</div>)}</div>
             )}
@@ -315,12 +324,12 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
                   ["Item", form.name.trim()],
                   ["Lot number", form.lotNumber.trim()],
                   ["Department", form.department],
-                  ["Device", form.device.trim() || "—"],
+                  ["Device", choices.status !== "ok" ? "—" : choices.value.device_choice === "device" ? choices.value.device : CHOICE_LABEL.none_device],
                   ["Base unit", v.unit],
                   ["Packaging", v.packaged ? `1 ${unitLabel(v.packUnit, 1)} = ${v.perPackage} ${unitLabel(v.unit, v.perPackage)}` : "None"],
                   ...(v.packaged ? [["Received", `${v.packages} ${unitLabel(v.packUnit, v.packages)} + ${v.loose} loose ${unitLabel(v.unit, v.loose)}`]] : []),
                   ["Total stored", `${v.total} ${unitLabel(v.unit, v.total)}`],
-                  ["Expiry", form.expiryDate || "None"],
+                  ["Expiry", choices.status !== "ok" ? "—" : choices.value.expiry_choice === "date" ? choices.value.expiry_date : CHOICE_LABEL.none_expiry],
                   ["Received on", form.receivedDate],
                   ["Low stock alert below", `${v.lowStock} ${unitLabel(v.unit, v.lowStock)}${v.lowStockIsDefault ? " (default)" : ""}`],
                 ].map(([k, val]) => (
@@ -353,7 +362,7 @@ export default function ReceiveWizard({ presets, devices, role, username, depart
             )}
             <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
               <button onClick={() => setStep(1)} disabled={submitting} style={{ flex: 1, background: "#F0F3F2", color: "#1B2B2E", border: "1px solid #C7D1CE", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14 }}>Back</button>
-              <button onClick={finish} disabled={submitting || plan.status !== "ok"} style={{ flex: 2, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: submitting ? 0.6 : 1 }}>
+              <button onClick={finish} disabled={submitting || plan.status !== "ok" || choices.status !== "ok"} style={{ flex: 2, background: "#0F7173", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: submitting ? 0.6 : 1 }}>
                 <Check size={15} /> {submitting ? "Saving…" : "Add to inventory"}
               </button>
             </div>

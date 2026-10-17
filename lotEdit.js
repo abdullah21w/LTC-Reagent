@@ -93,6 +93,19 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, pac
   } else if (deviceChanged && !(devices || []).some((d) => d.name === newDevice && d.department === original.department)) {
     errors.push(`"${newDevice}" isn't a device of the ${original.department || "lot's"} department. Choose one from the list.`);
   }
+  // Lots received with the explicit choices (MIGRATE_RECEIPT_CHOICES.sql) keep them
+  // consistent: giving a "No device recorded" lot a device records device_choice
+  // "device"; the expiry is either a date ("date") or deliberately none ("none") —
+  // clearing the date means choosing "No expiry date". Lots recorded before the
+  // choices existed (both NULL) stay as they are.
+  const explicitExpiry = EXPIRY_CHOICE_VALUES.includes(original.expiry_choice);
+  const newExpiryChoice = explicitExpiry ? (form.expiry_choice ?? original.expiry_choice) : null;
+  let newExpiry = form.expiry_date || null;
+  if (explicitExpiry) {
+    if (!EXPIRY_CHOICE_VALUES.includes(newExpiryChoice)) errors.push('Expiry: enter the expiry date, or choose "No expiry date".');
+    else if (newExpiryChoice === "date" && !isIsoDay(form.expiry_date)) errors.push('Expiry: enter the expiry date, or choose "No expiry date".');
+    else if (newExpiryChoice === "none") newExpiry = null;
+  }
   const qr = num(form.quantity_received), cq = num(form.current_quantity), low = num(form.low_stock_threshold);
   if (!Number.isFinite(qr) || qr < 0) errors.push("Quantity received must be a number of 0 or more.");
   if (!Number.isFinite(cq) || cq < 0) errors.push("Current quantity must be a number of 0 or more.");
@@ -185,18 +198,22 @@ export function planLotEdit({ original, form, packagingEnabled, unitsPerBox, pac
     unit: form.unit,
     quantity_received: qr,
     current_quantity: cq,
-    expiry_date: form.expiry_date || null,
+    expiry_date: newExpiry,
     low_stock_threshold: low,
     units_per_carton: packagingEnabled ? newPer : null,
     pack_unit: newPack,
     ...(deviceChanged ? { device: newDevice } : {}),
+    ...(deviceChanged && original.device_choice === "none" ? { device_choice: "device" } : {}),
+    ...(explicitExpiry && newExpiryChoice !== original.expiry_choice ? { expiry_choice: newExpiryChoice } : {}),
   };
   return { status: "ok", errors: [], blocks: [], confirmations, payload };
 }
 
 // ─── Saving (U2c-1) ─────────────────────────────────────────────────────────
 // The Edit Lot fields. Only the ones the user actually changed are written.
-export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit", "device"];
+export const EDITABLE_FIELDS = ["lot_number", "unit", "quantity_received", "current_quantity", "expiry_date", "low_stock_threshold", "units_per_carton", "pack_unit", "device", "device_choice", "expiry_choice"];
+const EXPIRY_CHOICE_VALUES = ["date", "none"];
+const isIsoDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const NUMERIC_FIELDS = new Set(["quantity_received", "current_quantity", "low_stock_threshold", "units_per_carton"]);
 
 // Comparable value: null for missing (and for a blank expiry date), a number
@@ -269,6 +286,12 @@ export async function saveLotEdit({ client, original, payload, username, now, lo
   if ("device" in changes && (expected.device !== "" || changes.device === null || String(changes.device).trim() === "")) {
     return { ok: false, changed, message: "Only a lot without a device can be given one here, so nothing was saved." };
   }
+  // The recorded choices only change together with what they describe (the
+  // database enforces the same: reagents_receipt_choices).
+  const choiceRefused = ("device_choice" in changes && !(expected.device_choice === "none" && changes.device_choice === "device" && "device" in changes))
+    || ("device" in changes && original.device_choice === "none" && changes.device_choice !== "device")
+    || ("expiry_choice" in changes && !(EXPIRY_CHOICE_VALUES.includes(expected.expiry_choice) && EXPIRY_CHOICE_VALUES.includes(changes.expiry_choice)));
+  if (choiceRefused) return { ok: false, changed, message: "The device or expiry choice doesn't match the change, so nothing was saved." };
   let q = client.from("reagents").update({ ...changes, edited_by: username, edited_at: now || new Date().toISOString() }).eq("id", original.id);
   for (const [f, v] of Object.entries(expected)) q = v === null ? q.is(f, null) : q.eq(f, v);
   let res;
@@ -287,7 +310,8 @@ export async function saveLotEdit({ client, original, payload, username, now, lo
   if (!logActivity) return { ok: true, changed, auditLogged: null };
   let auditLogged = false;
   try {
-    const deviceNote = "device" in changes ? `: device set to ${changes.device} (was none)` : "";
+    const deviceNote = ("device" in changes ? `: device set to ${changes.device} (was none)` : "")
+      + ("expiry_choice" in changes ? (changes.expiry_choice === "none" ? "; expiry: no expiry date" : `; expiry date set to ${changes.expiry_date}`) : "");
     const a = await logActivity("edit", "reagent", `${payload.name || original.name || ""} — Lot ${payload.lot_number ?? original.lot_number}${deviceNote}`.trim());
     auditLogged = !(a && a.error);
   } catch { auditLogged = false; }

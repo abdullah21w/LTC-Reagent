@@ -10,7 +10,7 @@ import { seed, IDS } from "../fixtures/pgSeed.mjs";
 
 const P = await load("receivePlan.js");
 const S = await load("receiveSave.js");
-const base = { name: "Reagent R", department: "Chemistry", itemType: "Reagent", device: "Analyzer 1", expiryDate: "2027-06-30", receivedDate: "2026-10-13", receivedBy: "tester", intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: true, receivingNotes: "", inspectionNotes: "" };
+const base = { name: "Reagent R", department: "Chemistry", itemType: "Reagent", device: "Analyzer 1", deviceChoice: "device", expiryDate: "2027-06-30", expiryChoice: "date", receivedDate: "2026-10-13", receivedBy: "tester", intact_container: true, complete_compound: true, expiration_validity: true, lot_matches_kit: true, storage_condition_ok: true, receivingNotes: "", inspectionNotes: "" };
 // What the Receive window sends: the plan's values (exactly as ReceiveWizard.finish does).
 const entryFrom = (form, over = {}) => {
   const r = P.planReceipt({ packaged: false, quantity: "", packUnit: "", unitsPerPackage: "", packages: "", loose: "", lowStock: "", ...form }, 5);
@@ -28,6 +28,7 @@ for (const version of PG_VERSIONS) suite(`U2d-2 · packaged Receive on PostgreSQ
     const db = await server.createDatabase();
     const c = await server.connect(db);
     await buildBaseSchema(c); await seed(c); await applyU2a(c);
+    await c.query(readRoot("MIGRATE_RECEIPT_CHOICES.sql")); // Receive now stores the device / expiry choices
     await c.query("grant select, insert, update, delete on all tables in schema public to anon");
     check("database is in the post-Gate-A3 state", (await c.query(readRoot("VERIFY_PACKAGING.sql"))).rows.find((r) => r.ord == 99).result, "PASS");
     const anon = await server.connect(db); await anon.query("set role anon");

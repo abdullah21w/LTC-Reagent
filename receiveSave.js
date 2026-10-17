@@ -30,6 +30,7 @@
 // gated database batch).
 
 import { releaseRefusalMessage } from "./releaseGuard";
+import { receiptChoicesProblem } from "./receivePlan";
 
 export function newReceiptId() {
   const c = globalThis.crypto;
@@ -50,11 +51,13 @@ export function buildReceiptRow(entry, id) {
     department: entry.department,
     item_type: entry.itemType,
     device: entry.device || "",
+    device_choice: entry.deviceChoice ?? null,
     lot_number: entry.lotNumber,
     unit: entry.unit,
     quantity_received: entry.quantityReceived,
     current_quantity: entry.quantityReceived,
     expiry_date: entry.expiryDate || null,
+    expiry_choice: entry.expiryChoice ?? null,
     date_added: entry.receivedDate,
     added_by: entry.receivedBy,
     low_stock_threshold: entry.lowStockThreshold,
@@ -72,7 +75,7 @@ export function buildReceiptRow(entry, id) {
 
 // The receipt's identity is its id (checked by the lookup itself); these submitted
 // fields must also match before an existing Lot is accepted as this receipt.
-const SAME_RECEIPT = ["name", "department", "item_type", "device", "lot_number", "unit", "quantity_received", "expiry_date", "date_added", "added_by", "units_per_carton", "pack_unit"];
+const SAME_RECEIPT = ["name", "department", "item_type", "device", "device_choice", "expiry_choice", "lot_number", "unit", "quantity_received", "expiry_date", "date_added", "added_by", "units_per_carton", "pack_unit"];
 const norm = (k, v) => (v === null || v === undefined || v === "" ? null : ["quantity_received", "units_per_carton"].includes(k) ? Number(v) : String(v));
 export const sameReceipt = (row, saved) => !!saved && saved.id === row.id && SAME_RECEIPT.every((k) => norm(k, row[k]) === norm(k, saved[k]));
 
@@ -86,6 +89,7 @@ export function describeReceiveError(e) {
   if (rel) return rel;
   const msg = String(e?.message || "");
   if (e?.code === "42501" || /row-level security|permission denied/i.test(msg)) return "You don't have permission to receive stock, so nothing was saved. Ask the owner to check your account.";
+  if (e?.code === "23514" && /reagents_receipt_choices/.test(msg)) return CHOICES_MESSAGE;
   if (e?.code === "23514") return `The database refused one of the values (${(msg.match(/constraint "([^"]+)"/) || [])[1] || "check failed"}). Nothing was saved — correct it and try again.`;
   if (e?.code === "23502") return `A required value is missing (${(msg.match(/column "([^"]+)"/) || [])[1] || "a field"}). Nothing was saved — complete it and try again.`;
   if (e?.code === "22P02" || e?.code === "22003" || e?.code === "22007" || e?.code === "22008") return `One of the values isn't in a valid format (${msg}). Nothing was saved — correct it and try again.`;
@@ -96,6 +100,7 @@ const SAME_WINDOW = "Keep this window open and press \"Add to inventory\" again 
 export const UNKNOWN_MESSAGE = `The connection failed before the database answered, so it isn't known yet whether this receipt was saved. Your entries are kept. ${SAME_WINDOW}`;
 export const NOT_CONFIRMED_MESSAGE = `The save could not be confirmed: the connection failed and the receipt was not found in the inventory yet (it may still arrive). Your entries are kept. ${SAME_WINDOW}`;
 export const MISMATCH_MESSAGE = "An earlier attempt of this receipt was already saved, with the values entered at that time. Nothing new was saved. Close this window and check the Lot in the inventory (edit it there if needed).";
+export const CHOICES_MESSAGE = "Choose the device (a device from the list, or \"No device recorded\") and the expiry (the date, or \"No expiry date\") — both are required. Nothing was saved.";
 export const AUDIT_WARNING = "The receipt was saved, but it could not be recorded in the activity log. Please tell the owner so the receipt can be noted manually.";
 
 export function receiptDescription(row) {
@@ -113,6 +118,9 @@ export async function saveReceipt({ client, entry, logActivity }) {
   const id = entry.receiptId;
   if (!id) return { ok: false, outcome: "rejected", id: null, message: "This receipt has no reference id, so it was not sent. Close the window and start again." };
   const row = buildReceiptRow(entry, id);
+  // The device and expiry decisions must be explicit and match the data — checked
+  // here before anything is sent, and again by the database (reagents_receipt_choices).
+  if (receiptChoicesProblem(row)) return { ok: false, outcome: "rejected", id, message: CHOICES_MESSAGE };
   const readBack = async () => {
     try {
       const r = await client.from("reagents").select("*").eq("id", id);
